@@ -1,12 +1,13 @@
 import { createClient } from "@supabase/supabase-js";
+import { Session } from "@shopify/shopify-api";
 
 // ─── Supabase Client ──────────────────────────────────────────────────────────
 
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
 if (!supabaseUrl || !supabaseKey) {
-  throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+  console.error("WARNING: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
 }
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
@@ -76,7 +77,6 @@ export const sessionStorage = {
 };
 
 function buildSession(data) {
-  const { Session } = require("@shopify/shopify-api");
   const session = new Session({
     id: data.id,
     shop: data.shop,
