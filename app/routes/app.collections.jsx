@@ -24,7 +24,7 @@ const GET_COLLECTIONS = `
         node {
           id
           title
-          productsCount
+          productsCount { count }
           sortOrder
           image {
             url
@@ -68,6 +68,7 @@ export async function loader({ request }) {
 
   const enriched = all.map((col) => ({
     ...col,
+    productsCount: col.productsCount?.count ?? 0,
     settings: settingsMap[col.id] || null,
   }));
 

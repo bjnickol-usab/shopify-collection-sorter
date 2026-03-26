@@ -41,7 +41,7 @@ const GET_COLLECTION_PRODUCTS = `
       id
       title
       sortOrder
-      productsCount
+      productsCount { count }
       products(first: $first, after: $after) {
         edges {
           node {
@@ -172,7 +172,7 @@ export async function loader({ request, params }) {
       id: collection?.id,
       title: collection?.title,
       sortOrder: collection?.sortOrder,
-      productsCount: collection?.productsCount,
+      productsCount: collection?.productsCount?.count ?? 0,
     },
     products,
     featuredIds: [...featuredIds],
