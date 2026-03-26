@@ -65,26 +65,25 @@ gh repo create shopify-collection-sorter --private --push --source=.
 
 ### Step 5 — Update URLs After First Deploy
 
-After Vercel finishes, you'll have a URL like `https://shopify-collection-sorter-xyz.vercel.app`
+After Vercel finishes, your app URL is `https://shopify-collection-sorter.vercel.app`
 
 Update it in **4 places**:
 
 **A) Vercel Environment Variables:**
-- Set `SHOPIFY_APP_URL` to your Vercel URL
+- Set `SHOPIFY_APP_URL` to `https://shopify-collection-sorter.vercel.app`
 - Trigger a redeploy: Settings → Deployments → Redeploy
 
-**B) shopify.app.toml (local file):**
+**B) shopify.app.toml (already updated):**
 ```toml
-application_url = "https://your-app.vercel.app"
+application_url = "https://shopify-collection-sorter.vercel.app"
 
 [auth]
 redirect_urls = [
-  "https://your-app.vercel.app/auth/callback",
-  "https://your-app.vercel.app/auth/shopify/callback",
+  "https://shopify-collection-sorter.vercel.app/auth/callback",
+  "https://shopify-collection-sorter.vercel.app/auth/shopify/callback",
   ...
 ]
 ```
-Then: `git add shopify.app.toml && git commit -m "update app url" && git push`
 
 **C) shopify.app.toml → `client_id`:**
 Replace `YOUR_SHOPIFY_CLIENT_ID` with your actual Client ID.

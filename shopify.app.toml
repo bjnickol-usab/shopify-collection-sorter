@@ -1,6 +1,6 @@
 name = "Collection Sorter"
 client_id = "YOUR_SHOPIFY_CLIENT_ID"
-application_url = "YOUR_VERCEL_APP_URL"
+application_url = "https://shopify-collection-sorter.vercel.app"
 embedded = true
 
 [access_scopes]
@@ -8,8 +8,8 @@ scopes = "read_products,write_products,read_inventory,read_locations"
 
 [auth]
 redirect_urls = [
-  "YOUR_VERCEL_APP_URL/auth/callback",
-  "YOUR_VERCEL_APP_URL/auth/shopify/callback",
+  "https://shopify-collection-sorter.vercel.app/auth/callback",
+  "https://shopify-collection-sorter.vercel.app/auth/shopify/callback",
   "http://localhost:3000/auth/callback",
   "http://localhost:3000/auth/shopify/callback"
 ]
