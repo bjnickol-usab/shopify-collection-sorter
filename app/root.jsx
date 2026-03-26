@@ -4,12 +4,14 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
+  useLoaderData,
+  useRouteError,
 } from "@remix-run/react";
+import { json } from "@remix-run/node";
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
-import { json } from "@remix-run/node";
 
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
@@ -48,14 +50,11 @@ export default function App() {
   );
 }
 
-import { useLoaderData } from "@remix-run/react";
-
 export function ErrorBoundary() {
-  return boundary.error(useRouteError());
+  const error = useRouteError();
+  return boundary.error(error);
 }
 
 export const headers = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
-
-import { useRouteError } from "@remix-run/react";
