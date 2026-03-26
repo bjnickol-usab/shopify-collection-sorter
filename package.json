@@ -10,11 +10,13 @@
     "start": "remix-serve ./build/server/index.js",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint ."
   },
-  "dependencies": {
+"dependencies": {
+    "@remix-run/dev": "^2.15.2",
     "@remix-run/node": "^2.15.2",
     "@remix-run/react": "^2.15.2",
     "@remix-run/serve": "^2.15.2",
     "@shopify/app-bridge-react": "^4.1.7",
+    "@shopify/cli": "^3.77.2",
     "@shopify/polaris": "^13.9.5",
     "@shopify/shopify-app-remix": "^3.7.0",
     "@shopify/shopify-app-session-storage": "^3.0.0",
@@ -24,8 +26,6 @@
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {
-    "@remix-run/dev": "^2.15.2",
-    "@shopify/cli": "^3.77.2",
     "eslint": "^8.57.1",
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.5.3",
