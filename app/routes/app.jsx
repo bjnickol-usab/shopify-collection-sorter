@@ -1,12 +1,33 @@
 import { json } from "@remix-run/node";
-import { Outlet } from "@remix-run/react";
+import { Outlet, useLoaderData, useRouteError } from "@remix-run/react";
+import { boundary } from "@shopify/shopify-app-remix/server";
+import { AppProvider } from "@shopify/shopify-app-remix/react";
+import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server.js";
 
-export async function loader({ request }) {
+export const loader = async ({ request }) => {
   await authenticate.admin(request);
-  return json({});
-}
+  return json({ apiKey: process.env.SHOPIFY_API_KEY || "" });
+};
 
 export default function App() {
-  return <Outlet />;
+  const { apiKey } = useLoaderData();
+  return (
+    <AppProvider isEmbeddedApp apiKey={apiKey}>
+      <NavMenu>
+        <a href="/app" rel="home">Dashboard</a>
+        <a href="/app/collections">Collections</a>
+      </NavMenu>
+      <Outlet />
+    </AppProvider>
+  );
 }
+
+export function ErrorBoundary() {
+  const error = useRouteError();
+  return boundary.error(error);
+}
+
+export const headers = (headersArgs) => {
+  return boundary.headers(headersArgs);
+};
