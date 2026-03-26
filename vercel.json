@@ -1,21 +1,10 @@
 {
   "buildCommand": "npm run build",
   "installCommand": "npm install --production=false",
-  "outputDirectory": "build/client",
+  "framework": "remix",
   "env": {
     "NODE_ENV": "production"
   },
-  "functions": {
-    "build/server/index.js": {
-      "includeFiles": "build/server/**"
-    }
-  },
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/build/server/index.js"
-    }
-  ],
   "headers": [
     {
       "source": "/(.*)",
