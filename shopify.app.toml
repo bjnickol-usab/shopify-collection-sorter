@@ -1,5 +1,5 @@
 name = "Collection Sorter"
-client_id = "YOUR_SHOPIFY_CLIENT_ID"
+client_id = "24ea7bd93c34fda10807b5380abe80c9"
 application_url = "https://shopify-collection-sorter.vercel.app"
 embedded = true
 
