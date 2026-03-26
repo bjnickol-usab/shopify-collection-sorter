@@ -18,6 +18,7 @@ const shopify = shopifyApp({
   ],
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
+  loginPath: "/auth/login",
   sessionStorage,
   distribution: AppDistribution.AppStore,
   future: {
