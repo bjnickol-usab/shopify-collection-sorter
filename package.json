@@ -16,6 +16,7 @@
     "@remix-run/node": "^2.15.2",
     "@remix-run/react": "^2.15.2",
     "@remix-run/serve": "^2.15.2",
+    "@vercel/remix": "^2.15.2",
     "@shopify/app-bridge-react": "^4.1.7",
     "@shopify/cli": "^3.77.2",
     "@shopify/polaris": "^13.9.5",
