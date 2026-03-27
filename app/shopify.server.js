@@ -10,18 +10,14 @@ const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: LATEST_API_VERSION,
-  scopes: process.env.SCOPES?.split(",") || [
-    "read_products",
-    "write_products",
-    "read_inventory",
-    "read_locations",
-  ],
+  scopes: ["read_products", "write_products", "read_inventory", "read_locations"],
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
-  loginPath: "/auth/login",
   sessionStorage,
   distribution: AppDistribution.AppStore,
-  future: {},
+  future: {
+    unstable_newEmbeddedAuthStrategy: true,
+  },
   ...(process.env.SHOP_CUSTOM_DOMAIN
     ? { customShopDomains: [process.env.SHOP_CUSTOM_DOMAIN] }
     : {}),

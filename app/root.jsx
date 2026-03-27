@@ -4,34 +4,14 @@ import {
   Outlet,
   Scripts,
   ScrollRestoration,
-  useLoaderData,
   useRouteError,
 } from "@remix-run/react";
-import { json } from "@remix-run/node";
 import { boundary } from "@shopify/shopify-app-remix/server";
-import { AppProvider } from "@shopify/shopify-app-remix/react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
-import { useState, useEffect } from "react";
 
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
-export async function loader({ request }) {
-  return json({ apiKey: process.env.SHOPIFY_API_KEY || "" });
-}
-
-function ClientAppProvider({ apiKey, children }) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  if (!mounted) return <>{children}</>;
-  return (
-    <AppProvider isEmbeddedApp apiKey={apiKey}>
-      {children}
-    </AppProvider>
-  );
-}
-
-export default function App() {
-  const { apiKey } = useLoaderData();
+export default function Root() {
   return (
     <html>
       <head>
@@ -41,9 +21,7 @@ export default function App() {
         <Links />
       </head>
       <body>
-        <ClientAppProvider apiKey={apiKey}>
-          <Outlet />
-        </ClientAppProvider>
+        <Outlet />
         <ScrollRestoration />
         <Scripts />
       </body>
