@@ -328,7 +328,7 @@ export default function CollectionsList() {
                           disabled={sorting}
                           onClick={() => navigate(`/app/collection?id=${encodeURIComponent(col.id)}`)}
                         >
-                          Manage Featured
+                          Manage
                         </Button>
                       </InlineStack>
                     </Box>

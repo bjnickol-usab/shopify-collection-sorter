@@ -109,7 +109,7 @@ export default function Dashboard() {
           navigate(`/app/collection?id=${encodedId}`);
         }}
       >
-        Manage Featured
+        Manage
       </Button>,
     ];
   });
@@ -163,7 +163,7 @@ export default function Dashboard() {
             {unsorted.length > 0 && (
               <Layout.Section>
                 <Banner title={`${unsorted.length} collection${unsorted.length > 1 ? "s have" : " has"} never been sorted`} tone="warning">
-                  Click <strong>Manage Featured</strong> next to any collection to set featured products, or go to <strong>Collections</strong> to bulk sort multiple at once.
+                  Click <strong>Manage</strong> next to any collection to set featured products, or go to <strong>Collections</strong> to bulk sort multiple at once.
                 </Banner>
               </Layout.Section>
             )}
