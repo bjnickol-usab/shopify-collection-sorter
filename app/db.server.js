@@ -215,7 +215,7 @@ export async function updateCollectionSortedAt(shopDomain, collectionId, collect
     collection_title: collectionTitle,
     last_sorted_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
-  });
+  }, { onConflict: "shop_domain,collection_id" });
 
   if (error) throw new Error(`Failed to update sort timestamp: ${error.message}`);
   return true;
