@@ -70,7 +70,7 @@ export async function loader({ request }) {
       ...col,
       productsCount: col.productsCount?.count ?? 0,
       settings: settingsMap[col.id] || null,
-    })),
+    })).sort((a, b) => a.title.localeCompare(b.title)),
   });
 }
 
