@@ -1,5 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-import { Session } from "@shopify/shopify-api";
 
 // ─── Supabase Client ──────────────────────────────────────────────────────────
 
@@ -22,30 +21,33 @@ export const sessionStorage = {
       state: session.state,
       is_online: session.isOnline,
       scope: session.scope,
-      expires: session.expires?.toISOString(),
-      access_token: session.accessToken,
-      user_id: session.onlineAccessInfo?.associated_user?.id,
-      first_name: session.onlineAccessInfo?.associated_user?.first_name,
-      last_name: session.onlineAccessInfo?.associated_user?.last_name,
-      email: session.onlineAccessInfo?.associated_user?.email,
-      account_owner: session.onlineAccessInfo?.associated_user?.account_owner,
-      locale: session.onlineAccessInfo?.associated_user?.locale,
-      collaborator: session.onlineAccessInfo?.associated_user?.collaborator,
-      email_verified: session.onlineAccessInfo?.associated_user?.email_verified,
+      expires: session.expires?.toISOString() ?? null,
+      access_token: session.accessToken ?? null,
+      user_id: session.onlineAccessInfo?.associated_user?.id ?? null,
+      first_name: session.onlineAccessInfo?.associated_user?.first_name ?? null,
+      last_name: session.onlineAccessInfo?.associated_user?.last_name ?? null,
+      email: session.onlineAccessInfo?.associated_user?.email ?? null,
+      account_owner: session.onlineAccessInfo?.associated_user?.account_owner ?? null,
+      locale: session.onlineAccessInfo?.associated_user?.locale ?? null,
+      collaborator: session.onlineAccessInfo?.associated_user?.collaborator ?? null,
+      email_verified: session.onlineAccessInfo?.associated_user?.email_verified ?? null,
     });
     if (error) throw new Error(`Failed to store session: ${error.message}`);
     return true;
   },
 
   async loadSession(id) {
-    const { data, error } = await supabase
-      .from("shopify_sessions")
-      .select("*")
-      .eq("id", id)
-      .single();
-
-    if (error || !data) return undefined;
-    return buildSession(data);
+    try {
+      const { data, error } = await supabase
+        .from("shopify_sessions")
+        .select("*")
+        .eq("id", id)
+        .single();
+      if (error || !data) return undefined;
+      return buildSessionObject(data);
+    } catch {
+      return undefined;
+    }
   },
 
   async deleteSession(id) {
@@ -72,21 +74,21 @@ export const sessionStorage = {
       .select("*")
       .eq("shop", shop);
     if (error) return [];
-    return data.map(buildSession);
+    return data.map(buildSessionObject);
   },
 };
 
-function buildSession(data) {
-  const session = new Session({
+// Build a plain session object without importing Session class
+function buildSessionObject(data) {
+  return {
     id: data.id,
     shop: data.shop,
     state: data.state,
     isOnline: data.is_online,
-  });
-  session.scope = data.scope;
-  session.expires = data.expires ? new Date(data.expires) : undefined;
-  session.accessToken = data.access_token;
-  return session;
+    scope: data.scope,
+    expires: data.expires ? new Date(data.expires) : undefined,
+    accessToken: data.access_token,
+  };
 }
 
 // ─── Featured Products ────────────────────────────────────────────────────────
@@ -104,9 +106,6 @@ export async function getFeaturedProducts(shopDomain, collectionId) {
 }
 
 export async function setFeaturedProducts(shopDomain, collectionId, products) {
-  // products = [{ product_id, product_title, position }]
-
-  // Delete existing featured products for this collection
   const { error: deleteError } = await supabase
     .from("featured_products")
     .delete()
@@ -114,10 +113,8 @@ export async function setFeaturedProducts(shopDomain, collectionId, products) {
     .eq("collection_id", collectionId);
 
   if (deleteError) throw new Error(`Failed to clear featured products: ${deleteError.message}`);
-
   if (products.length === 0) return [];
 
-  // Insert new featured products
   const rows = products.map((p, i) => ({
     shop_domain: shopDomain,
     collection_id: collectionId,
@@ -136,7 +133,6 @@ export async function setFeaturedProducts(shopDomain, collectionId, products) {
 }
 
 export async function addFeaturedProduct(shopDomain, collectionId, productId, productTitle) {
-  // Find the current max position
   const { data: existing } = await supabase
     .from("featured_products")
     .select("position")
@@ -169,7 +165,6 @@ export async function removeFeaturedProduct(shopDomain, collectionId, productId)
 
   if (error) throw new Error(`Failed to remove featured product: ${error.message}`);
 
-  // Re-number positions so they're sequential
   const { data } = await supabase
     .from("featured_products")
     .select("id")
