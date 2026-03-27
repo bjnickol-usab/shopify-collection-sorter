@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { Session } from "@shopify/shopify-api";
 
 // ─── Supabase Client ──────────────────────────────────────────────────────────
 
@@ -78,17 +79,18 @@ export const sessionStorage = {
   },
 };
 
-// Build a plain session object without importing Session class
+// Build a proper Session instance so methods like isActive() work
 function buildSessionObject(data) {
-  return {
+  const session = new Session({
     id: data.id,
     shop: data.shop,
     state: data.state,
     isOnline: data.is_online,
-    scope: data.scope,
-    expires: data.expires ? new Date(data.expires) : undefined,
-    accessToken: data.access_token,
-  };
+  });
+  session.scope = data.scope;
+  session.expires = data.expires ? new Date(data.expires) : undefined;
+  session.accessToken = data.access_token;
+  return session;
 }
 
 // ─── Featured Products ────────────────────────────────────────────────────────
