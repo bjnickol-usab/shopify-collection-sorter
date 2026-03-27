@@ -220,3 +220,45 @@ export async function updateCollectionSortedAt(shopDomain, collectionId, collect
   if (error) throw new Error(`Failed to update sort timestamp: ${error.message}`);
   return true;
 }
+
+// ─── Sort Schedules ───────────────────────────────────────────────────────────
+
+export async function getSchedule(shopDomain) {
+  const { data } = await supabase
+    .from("sort_schedules")
+    .select("*")
+    .eq("shop_domain", shopDomain)
+    .single();
+  return data || null;
+}
+
+export async function saveSchedule(shopDomain, { enabled, runHour, collectionIds }) {
+  const { error } = await supabase.from("sort_schedules").upsert({
+    shop_domain: shopDomain,
+    enabled,
+    run_hour: runHour,
+    collection_ids: collectionIds,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "shop_domain" });
+  if (error) throw new Error(`Failed to save schedule: ${error.message}`);
+  return true;
+}
+
+export async function getAllActiveSchedules() {
+  const { data, error } = await supabase
+    .from("sort_schedules")
+    .select("*")
+    .eq("enabled", true);
+  if (error) return [];
+  return data || [];
+}
+
+export async function updateScheduleRunResult(shopDomain, status, summary) {
+  const { error } = await supabase.from("sort_schedules").update({
+    last_run_at: new Date().toISOString(),
+    last_run_status: status,
+    last_run_summary: summary,
+    updated_at: new Date().toISOString(),
+  }).eq("shop_domain", shopDomain);
+  if (error) console.error("Failed to update schedule run result:", error.message);
+}

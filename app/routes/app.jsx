@@ -17,6 +17,7 @@ export default function App() {
       <NavMenu>
         <a href="/app" rel="home">Dashboard</a>
         <a href="/app/collections">Collections</a>
+        <a href="/app/schedule">Schedule</a>
       </NavMenu>
       <Outlet />
     </AppProvider>
