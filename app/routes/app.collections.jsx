@@ -182,9 +182,7 @@ export default function CollectionsList() {
 
                     <Button
                       onClick={() => {
-                        navigate(
-                          `/app/collections/${encodeURIComponent(col.id)}`
-                        );
+                        navigate(`/app/collection?id=${encodeURIComponent(col.id)}`);
                       }}
                     >
                       Manage Sort

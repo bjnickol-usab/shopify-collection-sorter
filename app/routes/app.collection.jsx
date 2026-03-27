@@ -127,12 +127,13 @@ async function fetchAllProducts(admin, collectionId) {
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
-export async function loader({ request, params }) {
+export async function loader({ request }) {
   const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
 
   // Decode the collection ID from the URL param
-  const collectionId = decodeURIComponent(params.id);
+  const url = new URL(request.url);
+  const collectionId = decodeURIComponent(url.searchParams.get("id") || "");
 
   // Fetch all products (paginated)
   let collection = null;
@@ -185,10 +186,11 @@ export async function loader({ request, params }) {
 
 // ─── Action ───────────────────────────────────────────────────────────────────
 
-export async function action({ request, params }) {
+export async function action({ request }) {
   const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
-  const collectionId = decodeURIComponent(params.id);
+  const url = new URL(request.url);
+  const collectionId = decodeURIComponent(url.searchParams.get("id") || "");
 
   const formData = await request.formData();
   const intent = formData.get("intent");

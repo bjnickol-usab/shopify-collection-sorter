@@ -106,7 +106,7 @@ export default function Dashboard() {
         size="slim"
         onClick={() => {
           const encodedId = encodeURIComponent(col.id);
-          navigate(`/app/collections/${encodedId}`);
+          navigate(`/app/collection?id=${encodedId}`);
         }}
       >
         Manage
