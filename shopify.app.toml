@@ -1,10 +1,10 @@
 name = "Collection Sorter"
-client_id = "24ea7bd93c34fda10807b5380abe80c9"
+client_id = "YOUR_SHOPIFY_CLIENT_ID"
 application_url = "https://shopify-collection-sorter.vercel.app"
 embedded = true
 
 [access_scopes]
-scopes = "read_products,write_products,read_inventory,read_locations"
+scopes = "read_products,write_products,read_collections,write_collections,read_inventory,read_locations"
 
 [auth]
 redirect_urls = [

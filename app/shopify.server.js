@@ -10,7 +10,7 @@ const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
   apiSecretKey: process.env.SHOPIFY_API_SECRET || "",
   apiVersion: LATEST_API_VERSION,
-  scopes: ["read_products", "write_products", "read_inventory", "read_locations"],
+  scopes: ["read_products", "write_products", "read_collections", "write_collections", "read_inventory", "read_locations"],
   appUrl: process.env.SHOPIFY_APP_URL || "",
   authPathPrefix: "/auth",
   sessionStorage,
