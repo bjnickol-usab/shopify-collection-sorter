@@ -171,7 +171,7 @@ export default function SchedulePage() {
               >
                 {schedule.enabled ? (
                   <p>
-                    Running daily at <strong>{HOUR_OPTIONS[schedule.run_hour]?.label}</strong> on <strong>{schedule.collection_ids?.length ?? 0} collection{schedule.collection_ids?.length !== 1 ? "s" : ""}</strong>.
+                    Running daily at <strong>midnight Eastern Time</strong> on <strong>{schedule.collection_ids?.length ?? 0} collection{schedule.collection_ids?.length !== 1 ? "s" : ""}</strong>.
                     {schedule.last_run_at && (
                       <> Last run: <strong>{formatLastRun(schedule.last_run_at)}</strong>
                         {schedule.last_run_status && (
@@ -200,18 +200,9 @@ export default function SchedulePage() {
 
                 <Checkbox
                   label="Enable daily auto-sort"
-                  helpText="When enabled, selected collections will be automatically sorted every day at the time below."
+                  helpText="When enabled, selected collections will be automatically sorted once every day at midnight Eastern Time (5:00 AM UTC)."
                   checked={enabled}
                   onChange={setEnabled}
-                />
-
-                <Select
-                  label="Run time (UTC)"
-                  options={HOUR_OPTIONS}
-                  value={runHour}
-                  onChange={setRunHour}
-                  disabled={!enabled}
-                  helpText="All times are in UTC. Add or subtract hours based on your timezone."
                 />
 
                 <Divider />
