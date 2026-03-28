@@ -195,82 +195,110 @@ export async function action({ request }) {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
-  // ── Save featured products only ─────────────────────────────────────────────
-  if (intent === "saveFeatured") {
-    const featuredJson = formData.get("featured");
-    const featured = JSON.parse(featuredJson);
+  try {
+    // ── Save featured products only ─────────────────────────────────────────────
+    if (intent === "saveFeatured") {
+      const featuredJson = formData.get("featured");
+      const featured = JSON.parse(featuredJson);
+      await setFeaturedProducts(shopDomain, collectionId, featured);
+      return json({ success: true, message: "Featured products saved." });
+    }
 
-    await setFeaturedProducts(shopDomain, collectionId, featured);
-    return json({ success: true, message: "Featured products saved." });
-  }
+    // ── Apply sort to Shopify ────────────────────────────────────────────────────
+    if (intent === "applySort") {
+      const featuredJson = formData.get("featured");
+      const productsJson = formData.get("products");
+      const collectionTitle = formData.get("collectionTitle");
 
-  // ── Apply sort to Shopify ────────────────────────────────────────────────────
-  if (intent === "applySort") {
-    const featuredJson = formData.get("featured");
-    const productsJson = formData.get("products");
-    const collectionTitle = formData.get("collectionTitle");
+      const featured = JSON.parse(featuredJson);
+      const products = JSON.parse(productsJson);
 
-    const featured = JSON.parse(featuredJson);    // [{ product_id, product_title }]
-    const products = JSON.parse(productsJson);    // [{ id, title, totalInventory }]
+      // 1. Save featured products in Supabase
+      await setFeaturedProducts(shopDomain, collectionId, featured);
 
-    // 1. Save featured products in Supabase
-    await setFeaturedProducts(shopDomain, collectionId, featured);
-
-    // 2. Set collection sort to MANUAL (required before reordering)
-    const setManualResponse = await admin.graphql(SET_COLLECTION_MANUAL_SORT, {
-      variables: {
-        input: {
-          id: collectionId,
-          sortOrder: "MANUAL",
+      // 2. Set collection sort to MANUAL
+      const setManualResponse = await admin.graphql(SET_COLLECTION_MANUAL_SORT, {
+        variables: {
+          input: {
+            id: collectionId,
+            sortOrder: "MANUAL",
+          },
         },
-      },
-    });
-    const setManualData = await setManualResponse.json();
-    const manualErrors = setManualData.data?.collectionUpdate?.userErrors;
-    if (manualErrors?.length > 0) {
-      return json({ success: false, message: manualErrors[0].message }, { status: 400 });
+      });
+      const setManualData = await setManualResponse.json();
+      const manualErrors = setManualData.data?.collectionUpdate?.userErrors;
+      if (manualErrors?.length > 0) {
+        return json({ success: false, message: manualErrors[0].message });
+      }
+
+      // 3. Build sort order:
+      //    1) Featured + in stock (in saved order)
+      //    2) Non-featured + in stock (sorted high → low)
+      //    3) Non-featured + out of stock
+      //    4) Featured + out of stock (demoted to very bottom)
+      const featuredSet = new Set(featured.map((f) => f.product_id));
+
+      const featuredInStock = featured
+        .map((f) => products.find((p) => p.id === f.product_id))
+        .filter(Boolean)
+        .filter((p) => (p.totalInventory || 0) > 0);
+
+      const featuredOOS = featured
+        .map((f) => products.find((p) => p.id === f.product_id))
+        .filter(Boolean)
+        .filter((p) => (p.totalInventory || 0) <= 0);
+
+      const nonFeaturedInStock = products
+        .filter((p) => !featuredSet.has(p.id) && (p.totalInventory || 0) > 0)
+        .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
+
+      const nonFeaturedOOS = products
+        .filter((p) => !featuredSet.has(p.id) && (p.totalInventory || 0) <= 0);
+
+      const sortedOrder = [
+        ...featuredInStock,
+        ...nonFeaturedInStock,
+        ...nonFeaturedOOS,
+        ...featuredOOS,
+      ];
+
+      // 4. Build moves array
+      const moves = sortedOrder.map((product, index) => ({
+        id: product.id,
+        newPosition: String(index),
+      }));
+
+      // 5. Batch moves in chunks of 250 (Shopify limit)
+      const BATCH_SIZE = 250;
+      for (let i = 0; i < moves.length; i += BATCH_SIZE) {
+        const batch = moves.slice(i, i + BATCH_SIZE);
+        const reorderResponse = await admin.graphql(REORDER_PRODUCTS, {
+          variables: { id: collectionId, moves: batch },
+        });
+        const reorderData = await reorderResponse.json();
+        const reorderErrors = reorderData.data?.collectionReorderProducts?.userErrors;
+        if (reorderErrors?.length > 0) {
+          return json({ success: false, message: reorderErrors[0].message });
+        }
+      }
+
+      // 6. Record sort timestamp
+      await updateCollectionSortedAt(shopDomain, collectionId, collectionTitle);
+
+      const featuredCount = featuredInStock.length + featuredOOS.length;
+      const totalCount = sortedOrder.length;
+      return json({
+        success: true,
+        message: `Sort applied! ${featuredCount} featured product${featuredCount !== 1 ? "s" : ""} pinned to top, ${totalCount - featuredCount} sorted by inventory.`,
+      });
     }
 
-    // 3. Build sort order: featured first (in their order), then remaining sorted by inventory DESC
-    const featuredSet = new Set(featured.map((f) => f.product_id));
-    const featuredProducts = featured
-      .map((f) => products.find((p) => p.id === f.product_id))
-      .filter(Boolean);
+    return json({ success: false, message: "Unknown intent" });
 
-    const nonFeatured = products
-      .filter((p) => !featuredSet.has(p.id))
-      .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
-
-    const sortedOrder = [...featuredProducts, ...nonFeatured];
-
-    // 4. Build moves array (Shopify uses 0-based index)
-    const moves = sortedOrder.map((product, index) => ({
-      id: product.id,
-      newPosition: String(index),
-    }));
-
-    // 5. Apply reorder
-    const reorderResponse = await admin.graphql(REORDER_PRODUCTS, {
-      variables: { id: collectionId, moves },
-    });
-    const reorderData = await reorderResponse.json();
-    const reorderErrors = reorderData.data?.collectionReorderProducts?.userErrors;
-    if (reorderErrors?.length > 0) {
-      return json({ success: false, message: reorderErrors[0].message }, { status: 400 });
-    }
-
-    // 6. Record sort timestamp
-    await updateCollectionSortedAt(shopDomain, collectionId, collectionTitle);
-
-    const featuredCount = featured.length;
-    const totalCount = sortedOrder.length;
-    return json({
-      success: true,
-      message: `Sort applied! ${featuredCount} featured product${featuredCount !== 1 ? "s" : ""} pinned to top, ${totalCount - featuredCount} sorted by inventory.`,
-    });
+  } catch (error) {
+    console.error("Action error:", error);
+    return json({ success: false, message: `Error: ${error.message}` });
   }
-
-  return json({ success: false, message: "Unknown intent" }, { status: 400 });
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -332,10 +360,17 @@ export default function CollectionDetail() {
     });
   }, []);
 
-  // Non-featured products sorted by inventory desc (preview)
-  const nonFeatured = products
-    .filter((p) => !featuredSet.has(p.id))
+  // Preview sort order matching the new 4-tier logic
+  const featuredInStock = featured.filter((p) => (p.totalInventory || 0) > 0);
+  const featuredOOS = featured.filter((p) => (p.totalInventory || 0) <= 0);
+  const nonFeaturedInStock = products
+    .filter((p) => !featuredSet.has(p.id) && (p.totalInventory || 0) > 0)
     .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
+  const nonFeaturedOOS = products
+    .filter((p) => !featuredSet.has(p.id) && (p.totalInventory || 0) <= 0);
+
+  // For the "all products" list preview, show full sorted order
+  const nonFeatured = [...nonFeaturedInStock, ...nonFeaturedOOS];
 
   // Build payload
   const buildFeaturedPayload = () =>
@@ -408,7 +443,7 @@ export default function CollectionDetail() {
           <Layout.Section>
             <Banner title="How this works" tone="info">
               <p>
-                Star ⭐ products to pin them at the top in the order you choose. All other products will be sorted automatically from <strong>highest inventory to lowest</strong>. Click <strong>Apply Sort to Shopify</strong> to publish the order to your store.
+                Star ⭐ products to pin them at the top. If a featured product goes <strong>out of stock</strong>, it will be automatically moved to the <strong>bottom</strong> of the collection. All in-stock non-featured products are sorted by inventory (highest to lowest). Click <strong>Apply Sort to Shopify</strong> to publish.
               </p>
             </Banner>
           </Layout.Section>
@@ -446,7 +481,14 @@ export default function CollectionDetail() {
                     </Box>
                   ) : (
                     <BlockStack gap="200">
-                      {featured.map((product, idx) => (
+                      {featuredOOS.length > 0 && (
+                        <Banner tone="warning">
+                          <strong>{featuredOOS.length} featured product{featuredOOS.length !== 1 ? "s are" : " is"} out of stock</strong> and will be moved to the bottom of the collection when sorted.
+                        </Banner>
+                      )}
+                      {featured.map((product, idx) => {
+                        const isOOS = (product.totalInventory || 0) <= 0;
+                        return (
                         <div
                           key={product.id}
                           style={{
@@ -454,9 +496,10 @@ export default function CollectionDetail() {
                             alignItems: "center",
                             gap: 12,
                             padding: "10px 12px",
-                            background: "#fff9e6",
-                            border: "1px solid #ffd700",
+                            background: isOOS ? "#fff4f4" : "#fff9e6",
+                            border: `1px solid ${isOOS ? "#ff9b9b" : "#ffd700"}`,
                             borderRadius: 8,
+                            opacity: isOOS ? 0.85 : 1,
                           }}
                         >
                           <Text variant="bodyMd" tone="subdued" fontWeight="bold">
@@ -468,9 +511,12 @@ export default function CollectionDetail() {
                             size="small"
                           />
                           <div style={{ flex: 1 }}>
-                            <Text variant="bodyMd" fontWeight="semibold">
-                              {product.title}
-                            </Text>
+                            <InlineStack gap="200" blockAlign="center">
+                              <Text variant="bodyMd" fontWeight="semibold">
+                                {product.title}
+                              </Text>
+                              {isOOS && <Badge tone="critical">→ Will go to bottom</Badge>}
+                            </InlineStack>
                             <div style={{ marginTop: 4 }}>
                               {inventoryBadge(product.totalInventory)}
                             </div>
@@ -502,7 +548,8 @@ export default function CollectionDetail() {
                             </Button>
                           </InlineStack>
                         </div>
-                      ))}
+                        );
+                      })}
                     </BlockStack>
                   )}
                 </BlockStack>
@@ -519,7 +566,7 @@ export default function CollectionDetail() {
                         📦 All Products — sorted by inventory
                       </Text>
                       <Text variant="bodySm" tone="subdued">
-                        Non-featured products will appear below your featured items, highest inventory first.
+                        In-stock featured products are pinned to the top. In-stock non-featured products follow by inventory. Out-of-stock products go to the bottom — featured OOS go last.
                         Click ⭐ to pin any product to the top.
                       </Text>
                     </BlockStack>

@@ -71,15 +71,34 @@ export async function action({ request }) {
     const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
     const featuredIds = new Set(featuredRows.map((r) => r.product_id));
 
-    const featuredProducts = featuredRows
+    // 4-tier sort:
+    // 1) Featured + in stock (in saved order)
+    // 2) Non-featured + in stock (high → low)
+    // 3) Non-featured + out of stock
+    // 4) Featured + out of stock (demoted to bottom)
+    const featuredInStock = featuredRows
       .map((f) => products.find((p) => p.id === f.product_id))
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((p) => (p.totalInventory || 0) > 0);
 
-    const nonFeatured = products
-      .filter((p) => !featuredIds.has(p.id))
+    const featuredOOS = featuredRows
+      .map((f) => products.find((p) => p.id === f.product_id))
+      .filter(Boolean)
+      .filter((p) => (p.totalInventory || 0) <= 0);
+
+    const nonFeaturedInStock = products
+      .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) > 0)
       .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
 
-    const sortedOrder = [...featuredProducts, ...nonFeatured];
+    const nonFeaturedOOS = products
+      .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) <= 0);
+
+    const sortedOrder = [
+      ...featuredInStock,
+      ...nonFeaturedInStock,
+      ...nonFeaturedOOS,
+      ...featuredOOS,
+    ];
 
     // Set to MANUAL sort
     const setManualResponse = await admin.graphql(SET_COLLECTION_MANUAL_SORT, {
@@ -117,7 +136,7 @@ export async function action({ request }) {
       success: true,
       collectionId,
       productCount: sortedOrder.length,
-      featuredCount: featuredProducts.length,
+      featuredCount: featuredInStock.length + featuredOOS.length,
     });
 
   } catch (error) {

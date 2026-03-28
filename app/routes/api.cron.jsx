@@ -66,15 +66,34 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
   const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
   const featuredIds = new Set(featuredRows.map((r) => r.product_id));
 
-  const featuredProducts = featuredRows
+  // 4-tier sort:
+  // 1) Featured + in stock (in saved order)
+  // 2) Non-featured + in stock (high → low)
+  // 3) Non-featured + out of stock
+  // 4) Featured + out of stock (demoted to bottom)
+  const featuredInStock = featuredRows
     .map((f) => products.find((p) => p.id === f.product_id))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((p) => (p.totalInventory || 0) > 0);
 
-  const nonFeatured = products
-    .filter((p) => !featuredIds.has(p.id))
+  const featuredOOS = featuredRows
+    .map((f) => products.find((p) => p.id === f.product_id))
+    .filter(Boolean)
+    .filter((p) => (p.totalInventory || 0) <= 0);
+
+  const nonFeaturedInStock = products
+    .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) > 0)
     .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
 
-  const sortedOrder = [...featuredProducts, ...nonFeatured];
+  const nonFeaturedOOS = products
+    .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) <= 0);
+
+  const sortedOrder = [
+    ...featuredInStock,
+    ...nonFeaturedInStock,
+    ...nonFeaturedOOS,
+    ...featuredOOS,
+  ];
 
   // Set to MANUAL
   const setManualResult = await client.request(SET_COLLECTION_MANUAL_SORT, {
@@ -106,18 +125,16 @@ export async function loader({ request }) {
   }
 
   const now = new Date();
-  const currentHour = now.getUTCHours();
-
-  console.log(`[CRON] Running at UTC hour ${currentHour}`);
+  console.log(`[CRON] Running daily sort at ${now.toISOString()}`);
 
   const schedules = await getAllActiveSchedules();
-  const due = schedules.filter((s) => s.run_hour === currentHour);
+  console.log(`[CRON] ${schedules.length} active schedules to process`);
 
-  console.log(`[CRON] ${schedules.length} active schedules, ${due.length} due now`);
-
-  if (due.length === 0) {
-    return json({ message: "No schedules due at this hour", hour: currentHour });
+  if (schedules.length === 0) {
+    return json({ message: "No active schedules", time: now.toISOString() });
   }
+
+  const due = schedules;
 
   const results = [];
 
@@ -179,5 +196,5 @@ export async function loader({ request }) {
     console.log(`[CRON] ${shopDomain}: ${summary}`);
   }
 
-  return json({ success: true, hour: currentHour, processed: due.length, results });
+  return json({ success: true, time: now.toISOString(), processed: due.length, results });
 }
