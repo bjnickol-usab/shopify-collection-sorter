@@ -4,8 +4,12 @@ import {
   getFeaturedProducts,
   updateCollectionSortedAt,
   updateScheduleRunResult,
+  getPositionSnapshot,
+  savePositionSnapshot,
+  getCollectionSortSettings,
   supabase,
 } from "../db.server.js";
+import { buildNormalSortOrder, buildOOSSortOrder, createSnapshotFromCurrentOrder } from "../sort.server.js";
 import { createAdminApiClient } from "@shopify/admin-api-client";
 
 // Verify request is from Vercel Cron
@@ -103,38 +107,24 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     return { success: true, productCount: 0, featuredCount: 0 };
   }
 
-  // Get featured products from Supabase
+  // Check OOS-only mode for this collection
+  const collectionSettings = await getCollectionSortSettings(shopDomain, collectionId);
+  const oosOnlyMode = collectionSettings?.oos_only_mode || false;
+
   const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
-  const featuredIds = new Set(featuredRows.map((r) => r.product_id));
+  let sortedOrder;
 
-  // 4-tier sort:
-  // 1) Featured + in stock (in saved order)
-  // 2) Non-featured + in stock (high → low)
-  // 3) Non-featured + out of stock
-  // 4) Featured + out of stock (demoted to bottom)
-  const featuredInStock = featuredRows
-    .map((f) => products.find((p) => p.id === f.product_id))
-    .filter(Boolean)
-    .filter((p) => (p.totalInventory || 0) > 0);
-
-  const featuredOOS = featuredRows
-    .map((f) => products.find((p) => p.id === f.product_id))
-    .filter(Boolean)
-    .filter((p) => (p.totalInventory || 0) <= 0);
-
-  const nonFeaturedInStock = products
-    .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) > 0)
-    .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
-
-  const nonFeaturedOOS = products
-    .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) <= 0);
-
-  const sortedOrder = [
-    ...featuredInStock,
-    ...nonFeaturedInStock,
-    ...nonFeaturedOOS,
-    ...featuredOOS,
-  ];
+  if (oosOnlyMode) {
+    const { snapshot } = await getPositionSnapshot(shopDomain, collectionId);
+    const currentSnapshot = Object.keys(snapshot).length > 0
+      ? snapshot
+      : createSnapshotFromCurrentOrder(products);
+    const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(products, currentSnapshot);
+    sortedOrder = oosSorted;
+    await savePositionSnapshot(shopDomain, collectionId, updatedSnapshot);
+  } else {
+    sortedOrder = buildNormalSortOrder(products, featuredRows);
+  }
 
   // Set to MANUAL sort
   const setManualResult = await client.request(SET_COLLECTION_MANUAL_SORT, {
@@ -156,10 +146,13 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     if (reorderErrors?.length > 0) throw new Error(reorderErrors[0].message);
   }
 
+  const oosCount = products.filter((p) => (p.totalInventory || 0) <= 0).length;
   return {
     success: true,
     productCount: sortedOrder.length,
-    featuredCount: featuredInStock.length + featuredOOS.length,
+    featuredCount: oosOnlyMode ? 0 : featuredRows.length,
+    oosCount,
+    oosOnlyMode,
   };
 }
 

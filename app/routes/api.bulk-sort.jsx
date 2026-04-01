@@ -1,6 +1,7 @@
 import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server.js";
-import { getFeaturedProducts, updateCollectionSortedAt } from "../db.server.js";
+import { getFeaturedProducts, updateCollectionSortedAt, getPositionSnapshot, savePositionSnapshot, getCollectionSortSettings } from "../db.server.js";
+import { buildNormalSortOrder, buildOOSSortOrder, createSnapshotFromCurrentOrder } from "../sort.server.js";
 
 const SET_COLLECTION_MANUAL_SORT = `
   mutation CollectionUpdate($input: CollectionInput!) {
@@ -67,38 +68,26 @@ export async function action({ request }) {
       if (edges.length === 0) break;
     }
 
-    // Get featured products from Supabase
+    // Check if OOS-only mode is enabled for this collection
+    const collectionSettings = await getCollectionSortSettings(shopDomain, collectionId);
+    const oosOnlyMode = collectionSettings?.oos_only_mode || false;
+
+    let sortedOrder;
     const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
-    const featuredIds = new Set(featuredRows.map((r) => r.product_id));
 
-    // 4-tier sort:
-    // 1) Featured + in stock (in saved order)
-    // 2) Non-featured + in stock (high → low)
-    // 3) Non-featured + out of stock
-    // 4) Featured + out of stock (demoted to bottom)
-    const featuredInStock = featuredRows
-      .map((f) => products.find((p) => p.id === f.product_id))
-      .filter(Boolean)
-      .filter((p) => (p.totalInventory || 0) > 0);
-
-    const featuredOOS = featuredRows
-      .map((f) => products.find((p) => p.id === f.product_id))
-      .filter(Boolean)
-      .filter((p) => (p.totalInventory || 0) <= 0);
-
-    const nonFeaturedInStock = products
-      .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) > 0)
-      .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
-
-    const nonFeaturedOOS = products
-      .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) <= 0);
-
-    const sortedOrder = [
-      ...featuredInStock,
-      ...nonFeaturedInStock,
-      ...nonFeaturedOOS,
-      ...featuredOOS,
-    ];
+    if (oosOnlyMode) {
+      // OOS-only: restore in-stock to original positions, move OOS to bottom
+      const { snapshot } = await getPositionSnapshot(shopDomain, collectionId);
+      const currentSnapshot = Object.keys(snapshot).length > 0
+        ? snapshot
+        : createSnapshotFromCurrentOrder(products);
+      const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(products, currentSnapshot);
+      sortedOrder = oosSorted;
+      await savePositionSnapshot(shopDomain, collectionId, updatedSnapshot);
+    } else {
+      // Normal 4-tier sort
+      sortedOrder = buildNormalSortOrder(products, featuredRows);
+    }
 
     // Set to MANUAL sort
     const setManualResponse = await admin.graphql(SET_COLLECTION_MANUAL_SORT, {
@@ -136,7 +125,8 @@ export async function action({ request }) {
       success: true,
       collectionId,
       productCount: sortedOrder.length,
-      featuredCount: featuredInStock.length + featuredOOS.length,
+      featuredCount: oosOnlyMode ? 0 : featuredRows.length,
+      oosOnlyMode,
     });
 
   } catch (error) {

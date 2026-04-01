@@ -262,3 +262,40 @@ export async function updateScheduleRunResult(shopDomain, status, summary) {
   }).eq("shop_domain", shopDomain);
   if (error) console.error("Failed to update schedule run result:", error.message);
 }
+
+// ─── OOS-Only Mode / Position Snapshots ──────────────────────────────────────
+
+export async function setOOSOnlyMode(shopDomain, collectionId, enabled) {
+  const { error } = await supabase.from("collection_sort_settings").upsert({
+    shop_domain: shopDomain,
+    collection_id: collectionId,
+    oos_only_mode: enabled,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "shop_domain,collection_id" });
+  if (error) throw new Error(`Failed to set OOS mode: ${error.message}`);
+  return true;
+}
+
+export async function getPositionSnapshot(shopDomain, collectionId) {
+  const { data } = await supabase
+    .from("collection_sort_settings")
+    .select("position_snapshot, oos_only_mode")
+    .eq("shop_domain", shopDomain)
+    .eq("collection_id", collectionId)
+    .single();
+  return {
+    snapshot: data?.position_snapshot || {},
+    oosOnlyMode: data?.oos_only_mode || false,
+  };
+}
+
+export async function savePositionSnapshot(shopDomain, collectionId, snapshot) {
+  const { error } = await supabase.from("collection_sort_settings").upsert({
+    shop_domain: shopDomain,
+    collection_id: collectionId,
+    position_snapshot: snapshot,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "shop_domain,collection_id" });
+  if (error) throw new Error(`Failed to save snapshot: ${error.message}`);
+  return true;
+}
