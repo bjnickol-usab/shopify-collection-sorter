@@ -1,12 +1,18 @@
 import { json } from "@remix-run/node";
-import { getAllActiveSchedules, getFeaturedProducts, updateCollectionSortedAt, updateScheduleRunResult } from "../db.server.js";
+import {
+  getAllActiveSchedules,
+  getFeaturedProducts,
+  updateCollectionSortedAt,
+  updateScheduleRunResult,
+  supabase,
+} from "../db.server.js";
 import { createAdminApiClient } from "@shopify/admin-api-client";
 
 // Verify request is from Vercel Cron
 function verifyCronRequest(request) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) return true; // Skip check if not configured (dev)
+  if (!cronSecret) return true;
   return authHeader === `Bearer ${cronSecret}`;
 }
 
@@ -43,8 +49,41 @@ const REORDER_PRODUCTS = `
   }
 `;
 
+async function getAccessTokenForShop(shopDomain) {
+  // Try offline session first
+  const { data: offlineSessions } = await supabase
+    .from("shopify_sessions")
+    .select("access_token, expires")
+    .eq("shop", shopDomain)
+    .eq("is_online", false)
+    .not("access_token", "is", null)
+    .order("expires", { ascending: false })
+    .limit(1);
+
+  if (offlineSessions?.[0]?.access_token) {
+    console.log(`[CRON] Found offline session for ${shopDomain}`);
+    return offlineSessions[0].access_token;
+  }
+
+  // Fall back to online session (token exchange strategy stores online sessions)
+  const { data: onlineSessions } = await supabase
+    .from("shopify_sessions")
+    .select("access_token, expires")
+    .eq("shop", shopDomain)
+    .not("access_token", "is", null)
+    .order("expires", { ascending: false })
+    .limit(1);
+
+  if (onlineSessions?.[0]?.access_token) {
+    console.log(`[CRON] Found online session for ${shopDomain}`);
+    return onlineSessions[0].access_token;
+  }
+
+  return null;
+}
+
 async function sortCollectionForShop(client, shopDomain, collectionId) {
-  // Fetch all products
+  // Fetch all products (paginated)
   let products = [];
   let after = null;
   let hasNextPage = true;
@@ -60,9 +99,11 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     if (edges.length === 0) break;
   }
 
-  if (products.length === 0) return { success: true, productCount: 0, featuredCount: 0 };
+  if (products.length === 0) {
+    return { success: true, productCount: 0, featuredCount: 0 };
+  }
 
-  // Get featured products
+  // Get featured products from Supabase
   const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
   const featuredIds = new Set(featuredRows.map((r) => r.product_id));
 
@@ -95,7 +136,7 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     ...featuredOOS,
   ];
 
-  // Set to MANUAL
+  // Set to MANUAL sort
   const setManualResult = await client.request(SET_COLLECTION_MANUAL_SORT, {
     variables: { input: { id: collectionId, sortOrder: "MANUAL" } },
   });
@@ -104,7 +145,7 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     throw new Error(manualErrors[0].message);
   }
 
-  // Reorder in batches
+  // Reorder in batches of 250
   const moves = sortedOrder.map((p, i) => ({ id: p.id, newPosition: String(i) }));
   const BATCH_SIZE = 250;
   for (let i = 0; i < moves.length; i += BATCH_SIZE) {
@@ -115,11 +156,14 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     if (reorderErrors?.length > 0) throw new Error(reorderErrors[0].message);
   }
 
-  return { success: true, productCount: sortedOrder.length, featuredCount: featuredProducts.length };
+  return {
+    success: true,
+    productCount: sortedOrder.length,
+    featuredCount: featuredInStock.length + featuredOOS.length,
+  };
 }
 
 export async function loader({ request }) {
-  // Vercel cron jobs use GET
   if (!verifyCronRequest(request)) {
     return json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -134,11 +178,9 @@ export async function loader({ request }) {
     return json({ message: "No active schedules", time: now.toISOString() });
   }
 
-  const due = schedules;
-
   const results = [];
 
-  for (const schedule of due) {
+  for (const schedule of schedules) {
     const shopDomain = schedule.shop_domain;
     const collectionIds = schedule.collection_ids || [];
 
@@ -147,24 +189,18 @@ export async function loader({ request }) {
       continue;
     }
 
-    // Get the shop's access token from sessions
-    const { supabase } = await import("../db.server.js");
-    const { data: sessions } = await supabase
-      .from("shopify_sessions")
-      .select("access_token")
-      .eq("shop", shopDomain)
-      .eq("is_online", false)
-      .limit(1);
+    // Get access token — tries offline first, falls back to online
+    const accessToken = await getAccessTokenForShop(shopDomain);
 
-    const accessToken = sessions?.[0]?.access_token;
     if (!accessToken) {
-      const msg = "No offline session found";
+      const msg = "No session found — user must open the app to refresh their session";
+      console.error(`[CRON] ${shopDomain}: ${msg}`);
       await updateScheduleRunResult(shopDomain, "error", msg);
       results.push({ shop: shopDomain, status: "error", message: msg });
       continue;
     }
 
-    // Create admin API client
+    // Create Shopify Admin API client
     const client = createAdminApiClient({
       storeDomain: shopDomain,
       apiVersion: "2025-01",
@@ -172,15 +208,14 @@ export async function loader({ request }) {
     });
 
     const collectionResults = [];
-    let hasError = false;
 
     for (const collectionId of collectionIds) {
       try {
         const result = await sortCollectionForShop(client, shopDomain, collectionId);
         await updateCollectionSortedAt(shopDomain, collectionId, "");
         collectionResults.push({ collectionId, ...result });
+        console.log(`[CRON] Sorted ${collectionId} for ${shopDomain}: ${result.productCount} products`);
       } catch (err) {
-        hasError = true;
         collectionResults.push({ collectionId, success: false, message: err.message });
         console.error(`[CRON] Error sorting ${collectionId} for ${shopDomain}:`, err.message);
       }
@@ -196,5 +231,5 @@ export async function loader({ request }) {
     console.log(`[CRON] ${shopDomain}: ${summary}`);
   }
 
-  return json({ success: true, time: now.toISOString(), processed: due.length, results });
+  return json({ success: true, time: now.toISOString(), processed: schedules.length, results });
 }
