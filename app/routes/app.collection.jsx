@@ -224,6 +224,33 @@ export async function action({ request }) {
       return json({ success: true, message: "Featured products saved." });
     }
 
+    // ── Refresh snapshot from current Shopify order ───────────────────────────
+    if (intent === "refreshSnapshot") {
+      // Fetch all products in their current Shopify order
+      let products = [];
+      let after = null;
+      let hasNextPage = true;
+
+      while (hasNextPage) {
+        const response = await admin.graphql(GET_COLLECTION_PRODUCTS, {
+          variables: { collectionId, first: 100, after },
+        });
+        const { data } = await response.json();
+        const edges = data?.collection?.products?.edges || [];
+        products = products.concat(edges.map((e) => e.node));
+        hasNextPage = data?.collection?.products?.pageInfo?.hasNextPage || false;
+        after = data?.collection?.products?.pageInfo?.endCursor || null;
+        if (edges.length === 0) break;
+      }
+
+      const snapshot = createSnapshotFromCurrentOrder(products);
+      await savePositionSnapshot(shopDomain, collectionId, snapshot);
+      return json({
+        success: true,
+        message: `Snapshot refreshed — ${products.length} products captured from current Shopify order.`,
+      });
+    }
+
     // ── Apply sort to Shopify ────────────────────────────────────────────────────
     if (intent === "applySort") {
       const featuredJson = formData.get("featured");
@@ -401,6 +428,12 @@ export default function CollectionDetail() {
     fetcher.submit(fd, { method: "post" });
   };
 
+  const handleRefreshSnapshot = () => {
+    const fd = new FormData();
+    fd.set("intent", "refreshSnapshot");
+    fetcher.submit(fd, { method: "post" });
+  };
+
   const handleApplySort = () => {
     const fd = new FormData();
     fd.set("intent", "applySort");
@@ -446,11 +479,16 @@ export default function CollectionDetail() {
           tone: "success",
         }}
         secondaryActions={[
-          {
+          ...(oosOnlyMode ? [{
+            content: "Refresh Snapshot",
+            disabled: isSaving,
+            onAction: handleRefreshSnapshot,
+            helpText: "Capture current Shopify order as the new restore position",
+          }] : [{
             content: "Save Featured Only",
             disabled: isSaving,
             onAction: handleSaveFeatured,
-          },
+          }]),
         ]}
       >
         <Layout>
@@ -487,7 +525,7 @@ export default function CollectionDetail() {
             <Banner title="How this works" tone="info">
               {oosOnlyMode ? (
                 <p>
-                  <strong>OOS-Only Mode:</strong> Only out-of-stock products are moved to the bottom. All in-stock products stay in their original positions. When an out-of-stock item comes back in stock, the next sort will automatically restore it to its original position.
+                  <strong>OOS-Only Mode:</strong> Only out-of-stock products are moved to the bottom. All in-stock products stay in their original positions. When an out-of-stock item comes back in stock, the next sort will automatically restore it to its original position. To update the restore positions after rearranging products in Shopify admin, click <strong>Refresh Snapshot</strong>.
                 </p>
               ) : (
                 <p>
