@@ -527,8 +527,6 @@ export default function CollectionDetail() {
                     </BlockStack>
                   </InlineStack>
                   <div style={{ opacity: oosOnlyMode ? 0.4 : 1, pointerEvents: oosOnlyMode ? "none" : "auto" }}>
-
-                  <div style={{ opacity: oosOnlyMode ? 0.4 : 1, pointerEvents: oosOnlyMode ? "none" : "auto" }}>
                   {featured.length === 0 ? (
                     <Box padding="400" background="bg-surface-secondary" borderRadius="200">
                       <Text tone="subdued" alignment="center">
