@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
 import { Session } from "@shopify/shopify-api";
 
 // ─── Supabase Client ──────────────────────────────────────────────────────────
