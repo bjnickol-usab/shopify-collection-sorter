@@ -33,11 +33,13 @@ import {
   setOOSOnlyMode,
   getPositionSnapshot,
   savePositionSnapshot,
+  getShopSettings,
 } from "../db.server.js";
 import {
   buildNormalSortOrder,
   buildOOSSortOrder,
   createSnapshotFromCurrentOrder,
+  fetchLocationInventory,
 } from "../sort.server.js";
 
 // ─── GraphQL ──────────────────────────────────────────────────────────────────
@@ -60,11 +62,12 @@ const GET_COLLECTION_PRODUCTS = `
               altText
             }
             status
-            variants(first: 1) {
+            variants(first: 50) {
               edges {
                 node {
                   id
                   sku
+                  inventoryItem { id }
                 }
               }
             }
@@ -168,6 +171,15 @@ export async function loader({ request }) {
     after = d.data?.collection?.products?.pageInfo?.endCursor;
   }
 
+  // Get location settings and fetch location-based inventory
+  const shopSettings = await getShopSettings(shopDomain);
+  const selectedLocationIds = shopSettings?.selected_location_ids || [];
+  const locationInventory = await fetchLocationInventory(
+    admin.graphql.bind(admin),
+    products,
+    selectedLocationIds
+  );
+
   // Get featured products from Supabase
   const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
   const featuredIds = new Set(featuredRows.map((r) => r.product_id));
@@ -188,6 +200,8 @@ export async function loader({ request }) {
     featuredOrder: featuredRows.map((r) => r.product_id),
     sortSettings,
     oosOnlyMode,
+    locationInventory,
+    selectedLocationIds,
     shopDomain,
     collectionId,
   });
@@ -274,25 +288,63 @@ export async function action({ request }) {
         return json({ success: false, message: manualErrors[0].message });
       }
 
+      // Get location settings
+      const shopSettings = await getShopSettings(shopDomain);
+      const selectedLocationIds = shopSettings?.selected_location_ids || [];
+
+      // Fetch location inventory for the products passed in
+      // (products come from the form as JSON, need to re-fetch for inventory item IDs)
+      // Use product totalInventory as fallback; for location-specific we need full product data
+      let locationInventory = {};
+      if (selectedLocationIds.length > 0) {
+        // Fetch fresh product data with variant inventory items
+        let freshProducts = [];
+        let after = null;
+        let hasNextPage = true;
+        while (hasNextPage) {
+          const resp = await admin.graphql(GET_COLLECTION_PRODUCTS, {
+            variables: { collectionId, first: 100, after },
+          });
+          const { data: d } = await resp.json();
+          const edges = d?.collection?.products?.edges || [];
+          freshProducts = freshProducts.concat(edges.map((e) => ({
+            ...e.node,
+            variants: e.node.variants?.edges?.map((v) => v.node) || [],
+          })));
+          hasNextPage = d?.collection?.products?.pageInfo?.hasNextPage || false;
+          after = d?.collection?.products?.pageInfo?.endCursor || null;
+          if (edges.length === 0) break;
+        }
+        locationInventory = await fetchLocationInventory(
+          admin.graphql.bind(admin),
+          freshProducts,
+          selectedLocationIds
+        );
+        // Merge location inventory into products array
+        products = products.map((p) => ({
+          ...p,
+          _locationInventory: locationInventory[p.id] ?? p.totalInventory,
+        }));
+      }
+
       let sortedOrder;
       let featuredCount = 0;
-      let oosCount = products.filter((p) => (p.totalInventory || 0) <= 0).length;
+      let oosCount = products.filter((p) => (locationInventory[p.id] ?? p.totalInventory ?? 0) <= 0).length;
 
       if (oosOnlyMode) {
-        // OOS-only mode: use snapshot for position restoration
         const { snapshot } = await getPositionSnapshot(shopDomain, collectionId);
         const currentSnapshot = Object.keys(snapshot).length > 0
           ? snapshot
           : createSnapshotFromCurrentOrder(products);
-        const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(products, currentSnapshot);
+        const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(
+          products, currentSnapshot, locationInventory
+        );
         sortedOrder = oosSorted;
         await savePositionSnapshot(shopDomain, collectionId, updatedSnapshot);
       } else {
-        // Normal 4-tier mode
         const featuredRows = featured.map((f, i) => ({ product_id: f.product_id, position: i + 1 }));
-        sortedOrder = buildNormalSortOrder(products, featuredRows);
+        sortedOrder = buildNormalSortOrder(products, featuredRows, locationInventory);
         featuredCount = featured.length;
-        // Clear snapshot so OOS mode gets fresh start next time
         await savePositionSnapshot(shopDomain, collectionId, {});
       }
 
@@ -336,7 +388,7 @@ export async function action({ request }) {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function CollectionDetail() {
-  const { collection, products, featuredIds, featuredOrder, sortSettings, oosOnlyMode: initialOOSMode } =
+  const { collection, products, featuredIds, featuredOrder, sortSettings, oosOnlyMode: initialOOSMode, locationInventory, selectedLocationIds } =
     useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
@@ -401,14 +453,14 @@ export default function CollectionDetail() {
     });
   }, []);
 
-  // Preview sort order matching the new 4-tier logic
-  const featuredInStock = featured.filter((p) => (p.totalInventory || 0) > 0);
-  const featuredOOS = featured.filter((p) => (p.totalInventory || 0) <= 0);
+  // Preview sort order matching the new 4-tier logic (uses location inventory if configured)
+  const featuredInStock = featured.filter((p) => getInventory(p) > 0);
+  const featuredOOS = featured.filter((p) => getInventory(p) <= 0);
   const nonFeaturedInStock = products
-    .filter((p) => !featuredSet.has(p.id) && (p.totalInventory || 0) > 0)
-    .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
+    .filter((p) => !featuredSet.has(p.id) && getInventory(p) > 0)
+    .sort((a, b) => getInventory(b) - getInventory(a));
   const nonFeaturedOOS = products
-    .filter((p) => !featuredSet.has(p.id) && (p.totalInventory || 0) <= 0);
+    .filter((p) => !featuredSet.has(p.id) && getInventory(p) <= 0);
 
   // For the "all products" list preview, show full sorted order
   const nonFeatured = [...nonFeaturedInStock, ...nonFeaturedOOS];
@@ -453,16 +505,29 @@ export default function CollectionDetail() {
     fetcher.submit(fd, { method: "post" });
   };
 
-  const formatInventory = (qty) => {
+
+
+  // Get effective inventory for a product (location-based or total)
+  const getInventory = (product) => {
+    if (locationInventory && Object.keys(locationInventory).length > 0) {
+      return locationInventory[product.id] ?? 0;
+    }
+    return product.totalInventory || 0;
+  };
+
+  const inventoryBadge = (product) => {
+    const qty = getInventory(product);
+    const suffix = selectedLocationIds?.length > 0 ? " (selected locations)" : "";
+    if (qty == null || qty <= 0) return <Badge tone="critical">Out of Stock{suffix}</Badge>;
+    if (qty < 10) return <Badge tone="warning">Low: {qty}{suffix}</Badge>;
+    return <Badge tone="success">{qty.toLocaleString()} in stock{suffix}</Badge>;
+  };
+
+  const formatInventory = (product) => {
+    const qty = getInventory(product);
     if (qty == null) return "—";
     if (qty < 0) return "0";
     return qty.toLocaleString();
-  };
-
-  const inventoryBadge = (qty) => {
-    if (qty == null || qty <= 0) return <Badge tone="critical">Out of Stock</Badge>;
-    if (qty < 10) return <Badge tone="warning">Low: {qty}</Badge>;
-    return <Badge tone="success">{qty.toLocaleString()} in stock</Badge>;
   };
 
   return (
@@ -492,6 +557,15 @@ export default function CollectionDetail() {
         ]}
       >
         <Layout>
+          {/* Location inventory indicator */}
+          {selectedLocationIds?.length > 0 && (
+            <Layout.Section>
+              <Banner tone="info">
+                <strong>Location-based inventory active</strong> — OOS status is determined by inventory at {selectedLocationIds.length} selected location{selectedLocationIds.length !== 1 ? "s" : ""}. <a href="/app/settings">Change in Settings</a>
+              </Banner>
+            </Layout.Section>
+          )}
+
           {/* OOS-only mode toggle */}
           <Layout.Section>
             <Card>
@@ -610,7 +684,7 @@ export default function CollectionDetail() {
                               {isOOS && <Badge tone="critical">→ Will go to bottom</Badge>}
                             </InlineStack>
                             <div style={{ marginTop: 4 }}>
-                              {inventoryBadge(product.totalInventory)}
+                              {inventoryBadge(product)}
                             </div>
                           </div>
                           <InlineStack gap="100">
@@ -765,12 +839,12 @@ function ProductRow({ product, isFeatured, onToggle, inventoryBadge, formatInven
           {product.title}
         </Text>
         <div style={{ marginTop: 4 }}>
-          {inventoryBadge(product.totalInventory)}
+          {inventoryBadge(product)}
         </div>
       </div>
       <div style={{ minWidth: 60, textAlign: "right" }}>
         <Text variant="bodyMd" tone="subdued">
-          {formatInventory(product.totalInventory)} units
+          {formatInventory(product)} units
         </Text>
       </div>
       <Button

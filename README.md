@@ -1,22 +1,23 @@
 # Shopify Collection Sorter
 
-Sort products in any Shopify collection by inventory level (highest → lowest), with the ability to pin "featured" products at the top.
+Sort products in any Shopify collection by inventory level (highest → lowest), with the ability to pin "featured" products at the top, demote out-of-stock items, schedule daily auto-sort, and filter inventory by specific fulfillment locations.
 
-## What It Does
+## Features
 
-- Lists all collections in your Shopify store
-- For each collection, shows all products with their current inventory
-- Lets you **star/feature** specific products → they are pinned to the top in a defined order
-- All remaining products are sorted **highest inventory → lowest** below the featured items
-- Pushes the sort order directly to Shopify with one click
+- **Manual sort** — sort any single collection by inventory, with featured products pinned to the top
+- **Bulk sort** — select multiple collections and sort them all at once
+- **OOS demotion** — featured products that go out of stock automatically move to the bottom
+- **OOS-only mode** — optionally only move out-of-stock items to the bottom, leaving everything else in place; items restore to their original position when back in stock
+- **Daily auto-sort** — schedule sorting to run automatically once per day via Vercel Cron
+- **Location-based inventory** — choose specific Shopify locations (e.g. only your online fulfillment warehouse) to determine in-stock/out-of-stock status, ignoring retail or other locations
 
 ---
 
 ## Tech Stack
 
 - **Remix** (Shopify App Remix framework)
-- **Supabase** (session storage + featured product configuration)
-- **Vercel** (hosting)
+- **Supabase** (session storage + app data)
+- **Vercel** (hosting + cron)
 - **GitHub** (source control)
 
 ---
@@ -25,100 +26,75 @@ Sort products in any Shopify collection by inventory level (highest → lowest),
 
 ### Step 1 — Create a Shopify Partner App
 
-1. Go to [partners.shopify.com](https://partners.shopify.com) → **Apps → Create app**
-2. Choose **Create app manually**
-3. Name it `Collection Sorter`
-4. Note your **Client ID** and **Client Secret**
+1. [partners.shopify.com](https://partners.shopify.com) → **Apps → Create app** → **Create app manually**
+2. Name it, note your **Client ID** and **Client Secret**
 
 ### Step 2 — Create a Supabase Project
 
-1. Go to [supabase.com](https://supabase.com) → **New Project**
-2. Once created, go to **Settings → API**
-3. Note your **Project URL** and **service_role** key (under "Project API keys")
-4. Go to **SQL Editor** → run the entire contents of `supabase/schema.sql`
+1. [supabase.com](https://supabase.com) → **New Project**
+2. **Settings → API** → note your **Project URL** and **service_role** key
+3. **SQL Editor** → run the entire contents of `supabase/schema.sql`
 
-### Step 3 — Create a GitHub Repository
+### Step 3 — Push to GitHub
 
 ```bash
 git init
 git add .
 git commit -m "Initial commit"
 gh repo create shopify-collection-sorter --private --push --source=.
-# Or manually create on github.com and push
 ```
 
 ### Step 4 — Deploy to Vercel
 
-1. Go to [vercel.com](https://vercel.com) → **New Project** → Import your GitHub repo
-2. Under **Environment Variables**, add:
-
-| Variable | Value |
-|---|---|
-| `SHOPIFY_API_KEY` | Your Shopify Client ID |
-| `SHOPIFY_API_SECRET` | Your Shopify Client Secret |
-| `SHOPIFY_APP_URL` | Leave blank for now — add after first deploy |
-| `SUPABASE_URL` | Your Supabase Project URL |
-| `SUPABASE_SERVICE_ROLE_KEY` | Your Supabase service_role key |
-| `SESSION_SECRET` | Any random 32+ character string |
-
-3. Click **Deploy**
+1. [vercel.com](https://vercel.com) → **New Project** → import your GitHub repo
+2. **Framework Preset:** Remix
+3. Add Environment Variables (see `.env.example` for the full list)
+4. Deploy
 
 ### Step 5 — Update URLs After First Deploy
 
-After Vercel finishes, your app URL is `https://shopify-collection-sorter.vercel.app`
-
-Update it in **4 places**:
-
-**A) Vercel Environment Variables:**
-- Set `SHOPIFY_APP_URL` to `https://shopify-collection-sorter.vercel.app`
-- Trigger a redeploy: Settings → Deployments → Redeploy
-
-**B) shopify.app.toml (already updated):**
-```toml
-application_url = "https://shopify-collection-sorter.vercel.app"
-
-[auth]
-redirect_urls = [
-  "https://shopify-collection-sorter.vercel.app/auth/callback",
-  "https://shopify-collection-sorter.vercel.app/auth/shopify/callback",
-  ...
-]
-```
-
-**C) shopify.app.toml → `client_id`:**
-Replace `YOUR_SHOPIFY_CLIENT_ID` with your actual Client ID.
-
-**D) Shopify Partner Dashboard:**
-- App → App setup → **App URL** → your Vercel URL
-- **Allowed redirection URL(s)** → add both `/auth/callback` and `/auth/shopify/callback`
+Once you have your Vercel URL, update it in **4 places**:
+- Vercel env var `SHOPIFY_APP_URL` (then redeploy)
+- `shopify.app.toml` → `application_url` and `redirect_urls`
+- Partner Dashboard → App URL
+- Partner Dashboard → Allowed redirection URL(s)
 
 ### Step 6 — Install on Your Store
 
-1. In the Shopify Partner Dashboard, go to your app
-2. Click **Select store** → choose your development or production store
-3. Click **Install app**
+Partner Dashboard → your app → **Test your app** → select store → **Install**
 
 ---
 
-## How the Sort Works
+## Environment Variables
 
-When you click **Apply Sort to Shopify**:
-
-1. All featured products (in the order you've arranged them) go to positions 1, 2, 3…
-2. All remaining products are sorted by `totalInventory` descending (highest stock first)
-3. The collection's sort order is set to `MANUAL` if it isn't already
-4. Shopify's `collectionReorderProducts` mutation applies the new positions
-
-> **Note:** Shopify processes the reorder asynchronously. It may take a few seconds to reflect in your storefront.
+See `.env.example`. In Vercel, also set `CRON_SECRET` (any random string) to secure the `/api/cron` endpoint.
 
 ---
 
-## Required Scopes
+## How Sorting Works
 
-- `read_products` — to fetch products and their inventory
-- `write_products` — to update collection sort order and product positions
-- `read_inventory` — for inventory data
-- `read_locations` — for multi-location inventory context
+**Normal mode (4-tier):**
+1. Featured + in stock (your saved order)
+2. Non-featured + in stock (inventory high → low)
+3. Non-featured + out of stock
+4. Featured + out of stock (demoted to the very bottom)
+
+**OOS-only mode:**
+- Only out-of-stock items move to the bottom
+- All other items keep their current relative order (captured via a position snapshot)
+- When an OOS item returns to stock, it's automatically restored to its original position on the next sort
+- Use the **Refresh Snapshot** button after manually reordering products in Shopify admin to update the canonical order
+
+**Location-based inventory (optional):**
+- Configure in the **Settings** page
+- If you select specific locations, in-stock/out-of-stock status is based only on inventory at those locations
+- If no locations are selected, falls back to total inventory across all locations
+
+---
+
+## Daily Auto-Sort
+
+Configured in the **Schedule** page. Runs once daily (Vercel Hobby plan limit) via `vercel.json`'s `crons` config, currently set to `0 5 * * *` (5 AM UTC = midnight Eastern, adjusting for DST).
 
 ---
 
@@ -126,26 +102,27 @@ When you click **Apply Sort to Shopify**:
 
 ```bash
 cp .env.example .env
-# Fill in your .env values
-
+# fill in your values
 npm install
 shopify app dev
 ```
 
-This will open a tunnel and install the app on your development store automatically.
+---
+
+## Required Scopes
+
+- `read_products`, `write_products` — products and collections
+- `read_inventory` — inventory levels
+- `read_locations` — for location-based inventory filtering
 
 ---
 
 ## Troubleshooting
 
-**"refused to connect" in Shopify admin:**
-The app URL in the Partner Dashboard doesn't match your Vercel URL. Double-check all 4 places listed in Step 5.
+**Blank screen / `{}` in Shopify admin:** Check that `unstable_newEmbeddedAuthStrategy: true` is set in `shopify.server.js` and that all 4 URL locations match exactly.
 
-**Sort not applying:**
-Make sure the collection is set to `MANUAL` sort in Shopify — the app does this automatically, but if there's an error, check the toast message.
+**Cron not running:** Visit `/api/cron` directly with the `Authorization: Bearer <CRON_SECRET>` header to test manually. Check Vercel function logs for `[CRON]` entries.
 
-**Products showing 0 inventory:**
-`totalInventory` is the sum across all locations and variants. If a product has inventory tracked at specific locations but not aggregated, this may show as 0. Check Shopify admin to confirm.
+**Supabase WebSocket crash on Vercel:** Already fixed — `ws` package is installed and passed as the realtime transport in `db.server.js`.
 
-**Vercel build failing:**
-Check that all environment variables are set. The app will throw on startup if `SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` are missing.
+**"Access denied" on collections query:** Scopes were changed after initial install — uninstall and reinstall the app to get a fresh token with current scopes.

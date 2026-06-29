@@ -1,7 +1,19 @@
 import { json } from "@remix-run/node";
 import { authenticate } from "../shopify.server.js";
-import { getFeaturedProducts, updateCollectionSortedAt, getPositionSnapshot, savePositionSnapshot, getCollectionSortSettings } from "../db.server.js";
-import { buildNormalSortOrder, buildOOSSortOrder, createSnapshotFromCurrentOrder } from "../sort.server.js";
+import {
+  getFeaturedProducts,
+  updateCollectionSortedAt,
+  getPositionSnapshot,
+  savePositionSnapshot,
+  getCollectionSortSettings,
+  getShopSettings,
+} from "../db.server.js";
+import {
+  buildNormalSortOrder,
+  buildOOSSortOrder,
+  createSnapshotFromCurrentOrder,
+  fetchLocationInventory,
+} from "../sort.server.js";
 
 const SET_COLLECTION_MANUAL_SORT = `
   mutation CollectionUpdate($input: CollectionInput!) {
@@ -22,12 +34,16 @@ const GET_COLLECTION_PRODUCTS = `
           node {
             id
             totalInventory
+            variants(first: 50) {
+              edges {
+                node {
+                  inventoryItem { id }
+                }
+              }
+            }
           }
         }
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
+        pageInfo { hasNextPage endCursor }
       }
     }
   }
@@ -51,7 +67,7 @@ export async function action({ request }) {
   const collectionTitle = formData.get("collectionTitle") || "";
 
   try {
-    // Fetch all products (paginated)
+    // Fetch all products (with variants for location inventory)
     let products = [];
     let after = null;
     let hasNextPage = true;
@@ -62,31 +78,45 @@ export async function action({ request }) {
       });
       const { data } = await response.json();
       const edges = data?.collection?.products?.edges || [];
-      products = products.concat(edges.map((e) => e.node));
+      products = products.concat(edges.map((e) => ({
+        ...e.node,
+        variants: e.node.variants?.edges?.map((v) => v.node) || [],
+      })));
       hasNextPage = data?.collection?.products?.pageInfo?.hasNextPage || false;
       after = data?.collection?.products?.pageInfo?.endCursor || null;
       if (edges.length === 0) break;
     }
 
-    // Check if OOS-only mode is enabled for this collection
+    // Get location settings
+    const shopSettings = await getShopSettings(shopDomain);
+    const selectedLocationIds = shopSettings?.selected_location_ids || [];
+
+    // Fetch location-based inventory if locations are configured
+    const locationInventory = await fetchLocationInventory(
+      admin.graphql.bind(admin),
+      products,
+      selectedLocationIds
+    );
+
+    // Get OOS mode and featured products
     const collectionSettings = await getCollectionSortSettings(shopDomain, collectionId);
     const oosOnlyMode = collectionSettings?.oos_only_mode || false;
-
-    let sortedOrder;
     const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
 
+    let sortedOrder;
+
     if (oosOnlyMode) {
-      // OOS-only: restore in-stock to original positions, move OOS to bottom
       const { snapshot } = await getPositionSnapshot(shopDomain, collectionId);
       const currentSnapshot = Object.keys(snapshot).length > 0
         ? snapshot
         : createSnapshotFromCurrentOrder(products);
-      const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(products, currentSnapshot);
+      const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(
+        products, currentSnapshot, locationInventory
+      );
       sortedOrder = oosSorted;
       await savePositionSnapshot(shopDomain, collectionId, updatedSnapshot);
     } else {
-      // Normal 4-tier sort
-      sortedOrder = buildNormalSortOrder(products, featuredRows);
+      sortedOrder = buildNormalSortOrder(products, featuredRows, locationInventory);
     }
 
     // Set to MANUAL sort
@@ -99,17 +129,12 @@ export async function action({ request }) {
       return json({ success: false, collectionId, message: manualErrors[0].message });
     }
 
-    // Batch reorder (250 per call)
-    const moves = sortedOrder.map((product, index) => ({
-      id: product.id,
-      newPosition: String(index),
-    }));
-
+    // Reorder in batches of 250
+    const moves = sortedOrder.map((p, i) => ({ id: p.id, newPosition: String(i) }));
     const BATCH_SIZE = 250;
     for (let i = 0; i < moves.length; i += BATCH_SIZE) {
-      const batch = moves.slice(i, i + BATCH_SIZE);
       const reorderResponse = await admin.graphql(REORDER_PRODUCTS, {
-        variables: { id: collectionId, moves: batch },
+        variables: { id: collectionId, moves: moves.slice(i, i + BATCH_SIZE) },
       });
       const reorderData = await reorderResponse.json();
       const reorderErrors = reorderData.data?.collectionReorderProducts?.userErrors;
@@ -118,7 +143,6 @@ export async function action({ request }) {
       }
     }
 
-    // Save timestamp
     await updateCollectionSortedAt(shopDomain, collectionId, collectionTitle);
 
     return json({
@@ -126,6 +150,7 @@ export async function action({ request }) {
       collectionId,
       productCount: sortedOrder.length,
       featuredCount: oosOnlyMode ? 0 : featuredRows.length,
+      locationCount: selectedLocationIds.length,
       oosOnlyMode,
     });
 

@@ -7,12 +7,17 @@ import {
   getPositionSnapshot,
   savePositionSnapshot,
   getCollectionSortSettings,
+  getShopSettings,
   supabase,
 } from "../db.server.js";
-import { buildNormalSortOrder, buildOOSSortOrder, createSnapshotFromCurrentOrder } from "../sort.server.js";
+import {
+  buildNormalSortOrder,
+  buildOOSSortOrder,
+  createSnapshotFromCurrentOrder,
+  fetchLocationInventory,
+} from "../sort.server.js";
 import { createAdminApiClient } from "@shopify/admin-api-client";
 
-// Verify request is from Vercel Cron
 function verifyCronRequest(request) {
   const authHeader = request.headers.get("authorization");
   const cronSecret = process.env.CRON_SECRET;
@@ -24,10 +29,19 @@ const GET_COLLECTION_PRODUCTS = `
   query GetCollectionProducts($collectionId: ID!, $first: Int!, $after: String) {
     collection(id: $collectionId) {
       id
-      title
       products(first: $first, after: $after) {
         edges {
-          node { id totalInventory }
+          node {
+            id
+            totalInventory
+            variants(first: 50) {
+              edges {
+                node {
+                  inventoryItem { id }
+                }
+              }
+            }
+          }
         }
         pageInfo { hasNextPage endCursor }
       }
@@ -54,40 +68,38 @@ const REORDER_PRODUCTS = `
 `;
 
 async function getAccessTokenForShop(shopDomain) {
-  // Try offline session first
   const { data: offlineSessions } = await supabase
     .from("shopify_sessions")
-    .select("access_token, expires")
+    .select("access_token")
     .eq("shop", shopDomain)
     .eq("is_online", false)
     .not("access_token", "is", null)
     .order("expires", { ascending: false })
     .limit(1);
 
-  if (offlineSessions?.[0]?.access_token) {
-    console.log(`[CRON] Found offline session for ${shopDomain}`);
-    return offlineSessions[0].access_token;
-  }
+  if (offlineSessions?.[0]?.access_token) return offlineSessions[0].access_token;
 
-  // Fall back to online session (token exchange strategy stores online sessions)
   const { data: onlineSessions } = await supabase
     .from("shopify_sessions")
-    .select("access_token, expires")
+    .select("access_token")
     .eq("shop", shopDomain)
     .not("access_token", "is", null)
     .order("expires", { ascending: false })
     .limit(1);
 
-  if (onlineSessions?.[0]?.access_token) {
-    console.log(`[CRON] Found online session for ${shopDomain}`);
-    return onlineSessions[0].access_token;
-  }
-
-  return null;
+  return onlineSessions?.[0]?.access_token || null;
 }
 
-async function sortCollectionForShop(client, shopDomain, collectionId) {
-  // Fetch all products (paginated)
+// Wrap createAdminApiClient request to match admin.graphql signature
+function makeGraphqlFn(client) {
+  return async (query, options) => {
+    const result = await client.request(query, options);
+    // Wrap in a response-like object with .json()
+    return { json: async () => result };
+  };
+}
+
+async function sortCollectionForShop(client, shopDomain, collectionId, selectedLocationIds) {
   let products = [];
   let after = null;
   let hasNextPage = true;
@@ -97,21 +109,26 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
       variables: { collectionId, first: 100, after },
     });
     const edges = data?.collection?.products?.edges || [];
-    products = products.concat(edges.map((e) => e.node));
+    products = products.concat(edges.map((e) => ({
+      ...e.node,
+      variants: e.node.variants?.edges?.map((v) => v.node) || [],
+    })));
     hasNextPage = data?.collection?.products?.pageInfo?.hasNextPage || false;
     after = data?.collection?.products?.pageInfo?.endCursor || null;
     if (edges.length === 0) break;
   }
 
-  if (products.length === 0) {
-    return { success: true, productCount: 0, featuredCount: 0 };
-  }
+  if (products.length === 0) return { success: true, productCount: 0, featuredCount: 0 };
 
-  // Check OOS-only mode for this collection
+  // Fetch location inventory
+  const graphqlFn = makeGraphqlFn(client);
+  const locationInventory = await fetchLocationInventory(graphqlFn, products, selectedLocationIds);
+
+  // Get sort settings
   const collectionSettings = await getCollectionSortSettings(shopDomain, collectionId);
   const oosOnlyMode = collectionSettings?.oos_only_mode || false;
-
   const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
+
   let sortedOrder;
 
   if (oosOnlyMode) {
@@ -119,40 +136,39 @@ async function sortCollectionForShop(client, shopDomain, collectionId) {
     const currentSnapshot = Object.keys(snapshot).length > 0
       ? snapshot
       : createSnapshotFromCurrentOrder(products);
-    const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(products, currentSnapshot);
+    const { sortedOrder: oosSorted, updatedSnapshot } = buildOOSSortOrder(
+      products, currentSnapshot, locationInventory
+    );
     sortedOrder = oosSorted;
     await savePositionSnapshot(shopDomain, collectionId, updatedSnapshot);
   } else {
-    sortedOrder = buildNormalSortOrder(products, featuredRows);
+    sortedOrder = buildNormalSortOrder(products, featuredRows, locationInventory);
   }
 
-  // Set to MANUAL sort
+  // Set to MANUAL
   const setManualResult = await client.request(SET_COLLECTION_MANUAL_SORT, {
     variables: { input: { id: collectionId, sortOrder: "MANUAL" } },
   });
-  const manualErrors = setManualResult.data?.collectionUpdate?.userErrors;
-  if (manualErrors?.length > 0) {
-    throw new Error(manualErrors[0].message);
+  if (setManualResult.data?.collectionUpdate?.userErrors?.length > 0) {
+    throw new Error(setManualResult.data.collectionUpdate.userErrors[0].message);
   }
 
-  // Reorder in batches of 250
+  // Reorder in batches
   const moves = sortedOrder.map((p, i) => ({ id: p.id, newPosition: String(i) }));
   const BATCH_SIZE = 250;
   for (let i = 0; i < moves.length; i += BATCH_SIZE) {
     const reorderResult = await client.request(REORDER_PRODUCTS, {
       variables: { id: collectionId, moves: moves.slice(i, i + BATCH_SIZE) },
     });
-    const reorderErrors = reorderResult.data?.collectionReorderProducts?.userErrors;
-    if (reorderErrors?.length > 0) throw new Error(reorderErrors[0].message);
+    if (reorderResult.data?.collectionReorderProducts?.userErrors?.length > 0) {
+      throw new Error(reorderResult.data.collectionReorderProducts.userErrors[0].message);
+    }
   }
 
-  const oosCount = products.filter((p) => (p.totalInventory || 0) <= 0).length;
   return {
     success: true,
     productCount: sortedOrder.length,
     featuredCount: oosOnlyMode ? 0 : featuredRows.length,
-    oosCount,
-    oosOnlyMode,
   };
 }
 
@@ -165,7 +181,7 @@ export async function loader({ request }) {
   console.log(`[CRON] Running daily sort at ${now.toISOString()}`);
 
   const schedules = await getAllActiveSchedules();
-  console.log(`[CRON] ${schedules.length} active schedules to process`);
+  console.log(`[CRON] ${schedules.length} active schedules`);
 
   if (schedules.length === 0) {
     return json({ message: "No active schedules", time: now.toISOString() });
@@ -182,18 +198,18 @@ export async function loader({ request }) {
       continue;
     }
 
-    // Get access token — tries offline first, falls back to online
     const accessToken = await getAccessTokenForShop(shopDomain);
-
     if (!accessToken) {
       const msg = "No session found — user must open the app to refresh their session";
-      console.error(`[CRON] ${shopDomain}: ${msg}`);
       await updateScheduleRunResult(shopDomain, "error", msg);
       results.push({ shop: shopDomain, status: "error", message: msg });
       continue;
     }
 
-    // Create Shopify Admin API client
+    // Get location settings for this shop
+    const shopSettings = await getShopSettings(shopDomain);
+    const selectedLocationIds = shopSettings?.selected_location_ids || [];
+
     const client = createAdminApiClient({
       storeDomain: shopDomain,
       apiVersion: "2025-10",
@@ -204,10 +220,9 @@ export async function loader({ request }) {
 
     for (const collectionId of collectionIds) {
       try {
-        const result = await sortCollectionForShop(client, shopDomain, collectionId);
+        const result = await sortCollectionForShop(client, shopDomain, collectionId, selectedLocationIds);
         await updateCollectionSortedAt(shopDomain, collectionId, "");
         collectionResults.push({ collectionId, ...result });
-        console.log(`[CRON] Sorted ${collectionId} for ${shopDomain}: ${result.productCount} products`);
       } catch (err) {
         collectionResults.push({ collectionId, success: false, message: err.message });
         console.error(`[CRON] Error sorting ${collectionId} for ${shopDomain}:`, err.message);
@@ -217,7 +232,7 @@ export async function loader({ request }) {
     const succeeded = collectionResults.filter((r) => r.success).length;
     const failed = collectionResults.filter((r) => !r.success).length;
     const status = failed === 0 ? "success" : succeeded > 0 ? "partial" : "error";
-    const summary = `${succeeded} of ${collectionIds.length} collections sorted successfully${failed > 0 ? `, ${failed} failed` : ""}`;
+    const summary = `${succeeded} of ${collectionIds.length} collections sorted${selectedLocationIds.length > 0 ? ` (${selectedLocationIds.length} locations)` : ""}${failed > 0 ? `, ${failed} failed` : ""}`;
 
     await updateScheduleRunResult(shopDomain, status, summary);
     results.push({ shop: shopDomain, status, summary, collectionResults });

@@ -18,6 +18,7 @@ export default function App() {
         <a href="/app" rel="home">Dashboard</a>
         <a href="/app/collections">Collections</a>
         <a href="/app/schedule">Schedule</a>
+        <a href="/app/settings">Settings</a>
       </NavMenu>
       <Outlet />
     </AppProvider>

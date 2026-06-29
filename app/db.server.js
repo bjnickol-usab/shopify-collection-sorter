@@ -11,9 +11,13 @@ if (!supabaseUrl || !supabaseKey) {
   console.error("WARNING: Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
 }
 
-export const supabase = createClient(supabaseUrl, supabaseKey);
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  realtime: {
+    transport: ws,
+  },
+});
 
-// ─── Shopify Session Storage (Supabase-backed) ────────────────────────────────
+// ─── Shopify Session Storage ──────────────────────────────────────────────────
 
 export const sessionStorage = {
   async storeSession(session) {
@@ -53,34 +57,24 @@ export const sessionStorage = {
   },
 
   async deleteSession(id) {
-    const { error } = await supabase
-      .from("shopify_sessions")
-      .delete()
-      .eq("id", id);
+    const { error } = await supabase.from("shopify_sessions").delete().eq("id", id);
     if (error) throw new Error(`Failed to delete session: ${error.message}`);
     return true;
   },
 
   async deleteSessions(ids) {
-    const { error } = await supabase
-      .from("shopify_sessions")
-      .delete()
-      .in("id", ids);
+    const { error } = await supabase.from("shopify_sessions").delete().in("id", ids);
     if (error) throw new Error(`Failed to delete sessions: ${error.message}`);
     return true;
   },
 
   async findSessionsByShop(shop) {
-    const { data, error } = await supabase
-      .from("shopify_sessions")
-      .select("*")
-      .eq("shop", shop);
+    const { data, error } = await supabase.from("shopify_sessions").select("*").eq("shop", shop);
     if (error) return [];
     return data.map(buildSessionObject);
   },
 };
 
-// Build a proper Session instance so methods like isActive() work
 function buildSessionObject(data) {
   const session = new Session({
     id: data.id,
@@ -94,6 +88,27 @@ function buildSessionObject(data) {
   return session;
 }
 
+// ─── Shop Settings (location preferences) ────────────────────────────────────
+
+export async function getShopSettings(shopDomain) {
+  const { data } = await supabase
+    .from("shop_settings")
+    .select("*")
+    .eq("shop_domain", shopDomain)
+    .single();
+  return data || null;
+}
+
+export async function saveShopSettings(shopDomain, { selectedLocationIds }) {
+  const { error } = await supabase.from("shop_settings").upsert({
+    shop_domain: shopDomain,
+    selected_location_ids: selectedLocationIds,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "shop_domain" });
+  if (error) throw new Error(`Failed to save shop settings: ${error.message}`);
+  return true;
+}
+
 // ─── Featured Products ────────────────────────────────────────────────────────
 
 export async function getFeaturedProducts(shopDomain, collectionId) {
@@ -103,7 +118,6 @@ export async function getFeaturedProducts(shopDomain, collectionId) {
     .eq("shop_domain", shopDomain)
     .eq("collection_id", collectionId)
     .order("position", { ascending: true });
-
   if (error) throw new Error(`Failed to get featured products: ${error.message}`);
   return data || [];
 }
@@ -114,7 +128,6 @@ export async function setFeaturedProducts(shopDomain, collectionId, products) {
     .delete()
     .eq("shop_domain", shopDomain)
     .eq("collection_id", collectionId);
-
   if (deleteError) throw new Error(`Failed to clear featured products: ${deleteError.message}`);
   if (products.length === 0) return [];
 
@@ -125,66 +138,9 @@ export async function setFeaturedProducts(shopDomain, collectionId, products) {
     product_title: p.product_title,
     position: i + 1,
   }));
-
-  const { data, error } = await supabase
-    .from("featured_products")
-    .insert(rows)
-    .select();
-
+  const { data, error } = await supabase.from("featured_products").insert(rows).select();
   if (error) throw new Error(`Failed to set featured products: ${error.message}`);
   return data;
-}
-
-export async function addFeaturedProduct(shopDomain, collectionId, productId, productTitle) {
-  const { data: existing } = await supabase
-    .from("featured_products")
-    .select("position")
-    .eq("shop_domain", shopDomain)
-    .eq("collection_id", collectionId)
-    .order("position", { ascending: false })
-    .limit(1);
-
-  const nextPosition = existing && existing.length > 0 ? existing[0].position + 1 : 1;
-
-  const { error } = await supabase.from("featured_products").upsert({
-    shop_domain: shopDomain,
-    collection_id: collectionId,
-    product_id: productId,
-    product_title: productTitle,
-    position: nextPosition,
-  });
-
-  if (error) throw new Error(`Failed to add featured product: ${error.message}`);
-  return true;
-}
-
-export async function removeFeaturedProduct(shopDomain, collectionId, productId) {
-  const { error } = await supabase
-    .from("featured_products")
-    .delete()
-    .eq("shop_domain", shopDomain)
-    .eq("collection_id", collectionId)
-    .eq("product_id", productId);
-
-  if (error) throw new Error(`Failed to remove featured product: ${error.message}`);
-
-  const { data } = await supabase
-    .from("featured_products")
-    .select("id")
-    .eq("shop_domain", shopDomain)
-    .eq("collection_id", collectionId)
-    .order("position", { ascending: true });
-
-  if (data) {
-    for (let i = 0; i < data.length; i++) {
-      await supabase
-        .from("featured_products")
-        .update({ position: i + 1 })
-        .eq("id", data[i].id);
-    }
-  }
-
-  return true;
 }
 
 // ─── Collection Sort Settings ─────────────────────────────────────────────────
@@ -196,7 +152,6 @@ export async function getCollectionSortSettings(shopDomain, collectionId) {
     .eq("shop_domain", shopDomain)
     .eq("collection_id", collectionId)
     .single();
-
   return data || null;
 }
 
@@ -205,7 +160,6 @@ export async function getAllCollectionSettings(shopDomain) {
     .from("collection_sort_settings")
     .select("*")
     .eq("shop_domain", shopDomain);
-
   return data || [];
 }
 
@@ -217,8 +171,44 @@ export async function updateCollectionSortedAt(shopDomain, collectionId, collect
     last_sorted_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   }, { onConflict: "shop_domain,collection_id" });
-
   if (error) throw new Error(`Failed to update sort timestamp: ${error.message}`);
+  return true;
+}
+
+// ─── OOS-Only Mode / Position Snapshots ──────────────────────────────────────
+
+export async function setOOSOnlyMode(shopDomain, collectionId, enabled) {
+  const { error } = await supabase.from("collection_sort_settings").upsert({
+    shop_domain: shopDomain,
+    collection_id: collectionId,
+    oos_only_mode: enabled,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "shop_domain,collection_id" });
+  if (error) throw new Error(`Failed to set OOS mode: ${error.message}`);
+  return true;
+}
+
+export async function getPositionSnapshot(shopDomain, collectionId) {
+  const { data } = await supabase
+    .from("collection_sort_settings")
+    .select("position_snapshot, oos_only_mode")
+    .eq("shop_domain", shopDomain)
+    .eq("collection_id", collectionId)
+    .single();
+  return {
+    snapshot: data?.position_snapshot || {},
+    oosOnlyMode: data?.oos_only_mode || false,
+  };
+}
+
+export async function savePositionSnapshot(shopDomain, collectionId, snapshot) {
+  const { error } = await supabase.from("collection_sort_settings").upsert({
+    shop_domain: shopDomain,
+    collection_id: collectionId,
+    position_snapshot: snapshot,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "shop_domain,collection_id" });
+  if (error) throw new Error(`Failed to save snapshot: ${error.message}`);
   return true;
 }
 
@@ -262,41 +252,4 @@ export async function updateScheduleRunResult(shopDomain, status, summary) {
     updated_at: new Date().toISOString(),
   }).eq("shop_domain", shopDomain);
   if (error) console.error("Failed to update schedule run result:", error.message);
-}
-
-// ─── OOS-Only Mode / Position Snapshots ──────────────────────────────────────
-
-export async function setOOSOnlyMode(shopDomain, collectionId, enabled) {
-  const { error } = await supabase.from("collection_sort_settings").upsert({
-    shop_domain: shopDomain,
-    collection_id: collectionId,
-    oos_only_mode: enabled,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: "shop_domain,collection_id" });
-  if (error) throw new Error(`Failed to set OOS mode: ${error.message}`);
-  return true;
-}
-
-export async function getPositionSnapshot(shopDomain, collectionId) {
-  const { data } = await supabase
-    .from("collection_sort_settings")
-    .select("position_snapshot, oos_only_mode")
-    .eq("shop_domain", shopDomain)
-    .eq("collection_id", collectionId)
-    .single();
-  return {
-    snapshot: data?.position_snapshot || {},
-    oosOnlyMode: data?.oos_only_mode || false,
-  };
-}
-
-export async function savePositionSnapshot(shopDomain, collectionId, snapshot) {
-  const { error } = await supabase.from("collection_sort_settings").upsert({
-    shop_domain: shopDomain,
-    collection_id: collectionId,
-    position_snapshot: snapshot,
-    updated_at: new Date().toISOString(),
-  }, { onConflict: "shop_domain,collection_id" });
-  if (error) throw new Error(`Failed to save snapshot: ${error.message}`);
-  return true;
 }

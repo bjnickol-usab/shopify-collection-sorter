@@ -5,7 +5,7 @@ import { createReadableStreamFromReadable } from "@remix-run/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server.js";
 
-const ABORT_DELAY = 5000;
+const ABORT_DELAY = 5_000;
 
 export default async function handleRequest(
   request,
@@ -14,9 +14,10 @@ export default async function handleRequest(
   remixContext
 ) {
   addDocumentResponseHeaders(request, responseHeaders);
-
   const userAgent = request.headers.get("user-agent");
-  const callbackName = isbot(userAgent ?? "") ? "onAllReady" : "onShellReady";
+  const callbackName = isbot(userAgent ?? "")
+    ? "onAllReady"
+    : "onShellReady";
 
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
@@ -29,6 +30,7 @@ export default async function handleRequest(
         [callbackName]: () => {
           const body = new PassThrough();
           const stream = createReadableStreamFromReadable(body);
+
           responseHeaders.set("Content-Type", "text/html");
           resolve(
             new Response(stream, {

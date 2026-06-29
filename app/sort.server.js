@@ -1,10 +1,5 @@
 /**
- * Shared sort logic used by:
- * - app.collection.jsx (individual sort)
- * - api.bulk-sort.jsx (bulk sort)
- * - api.cron.jsx (scheduled sort)
- *
- * Two modes:
+ * Shared sort logic - used by app.collection.jsx, api.bulk-sort.jsx, api.cron.jsx
  *
  * NORMAL MODE (4-tier):
  *   1. Featured + in stock (saved order)
@@ -14,82 +9,79 @@
  *
  * OOS-ONLY MODE:
  *   - Only moves OOS items to bottom
- *   - All in-stock items maintain their canonical order (from position snapshot)
- *   - OOS items go to bottom but keep their snapshot rank for restoration
- *   - When item comes back in stock → restored to original position
+ *   - In-stock items maintain canonical order from position snapshot
+ *   - Restores items to original position when back in stock
+ *
+ * INVENTORY SOURCE:
+ *   - If selectedLocationIds is set and non-empty, OOS is determined by
+ *     summing inventory only at those locations (locationInventory map)
+ *   - Otherwise falls back to product.totalInventory
  */
 
 /**
- * Build sorted order for NORMAL mode.
- * @param {Array} products - [{id, totalInventory}]
- * @param {Array} featuredRows - [{product_id}] in saved order
- * @returns {Array} sorted products
+ * Get effective inventory for a product.
+ * @param {Object} product - product with totalInventory
+ * @param {Object} locationInventory - map of {productId: locationInventoryTotal}
+ * @returns {number}
  */
-export function buildNormalSortOrder(products, featuredRows) {
+export function getEffectiveInventory(product, locationInventory = {}) {
+  if (locationInventory && Object.keys(locationInventory).length > 0) {
+    return locationInventory[product.id] ?? 0;
+  }
+  return product.totalInventory || 0;
+}
+
+/**
+ * Build sorted order for NORMAL mode.
+ */
+export function buildNormalSortOrder(products, featuredRows, locationInventory = {}) {
   const featuredIds = new Set(featuredRows.map((r) => r.product_id));
 
   const featuredInStock = featuredRows
     .map((f) => products.find((p) => p.id === f.product_id))
     .filter(Boolean)
-    .filter((p) => (p.totalInventory || 0) > 0);
+    .filter((p) => getEffectiveInventory(p, locationInventory) > 0);
 
   const featuredOOS = featuredRows
     .map((f) => products.find((p) => p.id === f.product_id))
     .filter(Boolean)
-    .filter((p) => (p.totalInventory || 0) <= 0);
+    .filter((p) => getEffectiveInventory(p, locationInventory) <= 0);
 
   const nonFeaturedInStock = products
-    .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) > 0)
-    .sort((a, b) => (b.totalInventory || 0) - (a.totalInventory || 0));
+    .filter((p) => !featuredIds.has(p.id) && getEffectiveInventory(p, locationInventory) > 0)
+    .sort((a, b) => getEffectiveInventory(b, locationInventory) - getEffectiveInventory(a, locationInventory));
 
   const nonFeaturedOOS = products
-    .filter((p) => !featuredIds.has(p.id) && (p.totalInventory || 0) <= 0);
+    .filter((p) => !featuredIds.has(p.id) && getEffectiveInventory(p, locationInventory) <= 0);
 
   return [...featuredInStock, ...nonFeaturedInStock, ...nonFeaturedOOS, ...featuredOOS];
 }
 
 /**
  * Build sorted order for OOS-ONLY mode.
- * @param {Array} products - [{id, totalInventory}] in current Shopify order
- * @param {Object} snapshot - {product_id: rank} canonical position map
- * @returns {{ sortedOrder: Array, updatedSnapshot: Object }}
  */
-export function buildOOSSortOrder(products, snapshot) {
-  const inStock = products.filter((p) => (p.totalInventory || 0) > 0);
-  const oos = products.filter((p) => (p.totalInventory || 0) <= 0);
+export function buildOOSSortOrder(products, snapshot, locationInventory = {}) {
+  const inStock = products.filter((p) => getEffectiveInventory(p, locationInventory) > 0);
+  const oos = products.filter((p) => getEffectiveInventory(p, locationInventory) <= 0);
 
-  // Find the highest existing rank so new products can be appended after
   const existingRanks = Object.values(snapshot);
   let maxRank = existingRanks.length > 0 ? Math.max(...existingRanks) : -1;
 
-  // Build updated snapshot — preserve OOS product ranks, add new products
   const updatedSnapshot = { ...snapshot };
-  const unranked = [];
 
   for (const product of products) {
     if (updatedSnapshot[product.id] === undefined) {
-      unranked.push(product.id);
+      maxRank += 1;
+      updatedSnapshot[product.id] = maxRank;
     }
   }
 
-  // Assign new products ranks at the end (based on their current relative order)
-  for (const productId of unranked) {
-    maxRank += 1;
-    updatedSnapshot[productId] = maxRank;
-  }
-
-  // Sort in-stock products by their snapshot rank
   const sortedInStock = [...inStock].sort((a, b) => {
-    const rankA = updatedSnapshot[a.id] ?? 999999;
-    const rankB = updatedSnapshot[b.id] ?? 999999;
-    return rankA - rankB;
+    return (updatedSnapshot[a.id] ?? 999999) - (updatedSnapshot[b.id] ?? 999999);
   });
 
-  // OOS products also sorted by snapshot rank (so when they come back they restore correctly)
   const sortedOOS = [...oos].sort((a, b) => {
-    const rankA = updatedSnapshot[a.id] ?? 999999;
-    const rankB = updatedSnapshot[b.id] ?? 999999;
-    return rankA - rankB;
+    return (updatedSnapshot[a.id] ?? 999999) - (updatedSnapshot[b.id] ?? 999999);
   });
 
   return {
@@ -99,14 +91,79 @@ export function buildOOSSortOrder(products, snapshot) {
 }
 
 /**
- * If no snapshot exists yet, create one from current product order.
- * @param {Array} products - in current Shopify order
- * @returns {Object} snapshot {product_id: rank}
+ * Create a snapshot from the current product order.
  */
 export function createSnapshotFromCurrentOrder(products) {
   const snapshot = {};
-  products.forEach((p, i) => {
-    snapshot[p.id] = i;
-  });
+  products.forEach((p, i) => { snapshot[p.id] = i; });
   return snapshot;
+}
+
+/**
+ * Fetch location inventory for a list of products using selected location IDs.
+ * Returns a map of { productId: totalInventoryAtSelectedLocations }
+ *
+ * @param {Function} adminGraphql - Shopify admin.graphql function
+ * @param {Array} products - [{id, variants}] where variants have inventoryItem
+ * @param {Array} selectedLocationIds - location GIDs to sum inventory from
+ * @returns {Object} { productId: number }
+ */
+export async function fetchLocationInventory(adminGraphql, products, selectedLocationIds) {
+  if (!selectedLocationIds || selectedLocationIds.length === 0) {
+    return {};
+  }
+
+  const locationInventory = {};
+  const locationIdSet = new Set(selectedLocationIds);
+
+  // Batch products into groups of 10 to avoid query complexity limits
+  const BATCH_SIZE = 10;
+
+  for (let i = 0; i < products.length; i += BATCH_SIZE) {
+    const batch = products.slice(i, i + BATCH_SIZE);
+
+    for (const product of batch) {
+      let productTotal = 0;
+
+      // Each product may have multiple variants, each with an inventoryItem
+      if (product.variants) {
+        for (const variant of product.variants) {
+          if (!variant.inventoryItem?.id) continue;
+
+          const response = await adminGraphql(
+            `query GetInventoryLevels($inventoryItemId: ID!, $first: Int!) {
+              inventoryItem(id: $inventoryItemId) {
+                inventoryLevels(first: $first) {
+                  edges {
+                    node {
+                      location { id }
+                      quantities(names: ["available"]) {
+                        name
+                        quantity
+                      }
+                    }
+                  }
+                }
+              }
+            }`,
+            { variables: { inventoryItemId: variant.inventoryItem.id, first: 50 } }
+          );
+
+          const { data } = await response.json();
+          const levels = data?.inventoryItem?.inventoryLevels?.edges || [];
+
+          for (const { node } of levels) {
+            if (locationIdSet.has(node.location.id)) {
+              const availableQty = node.quantities?.find(q => q.name === "available")?.quantity || 0;
+              productTotal += availableQty;
+            }
+          }
+        }
+      }
+
+      locationInventory[product.id] = productTotal;
+    }
+  }
+
+  return locationInventory;
 }
