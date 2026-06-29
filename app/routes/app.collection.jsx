@@ -453,6 +453,14 @@ export default function CollectionDetail() {
     });
   }, []);
 
+  // Get effective inventory for a product (location-based or total)
+  const getInventory = (product) => {
+    if (locationInventory && Object.keys(locationInventory).length > 0) {
+      return locationInventory[product.id] ?? 0;
+    }
+    return product.totalInventory || 0;
+  };
+
   // Preview sort order matching the new 4-tier logic (uses location inventory if configured)
   const featuredInStock = featured.filter((p) => getInventory(p) > 0);
   const featuredOOS = featured.filter((p) => getInventory(p) <= 0);
@@ -506,14 +514,6 @@ export default function CollectionDetail() {
   };
 
 
-
-  // Get effective inventory for a product (location-based or total)
-  const getInventory = (product) => {
-    if (locationInventory && Object.keys(locationInventory).length > 0) {
-      return locationInventory[product.id] ?? 0;
-    }
-    return product.totalInventory || 0;
-  };
 
   const inventoryBadge = (product) => {
     const qty = getInventory(product);
