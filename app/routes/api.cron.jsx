@@ -196,7 +196,7 @@ export async function loader({ request }) {
     // Create Shopify Admin API client
     const client = createAdminApiClient({
       storeDomain: shopDomain,
-      apiVersion: "2025-01",
+      apiVersion: "2025-10",
       accessToken,
     });
 
