@@ -21,9 +21,10 @@ import {
   Frame,
   EmptyState,
   Box,
+  Icon,
   Checkbox,
 } from "@shopify/polaris";
-import { StarIcon, StarFilledIcon, ArrowUpIcon, ArrowDownIcon } from "@shopify/polaris-icons";
+import { StarIcon, StarFilledIcon, ArrowUpIcon, ArrowDownIcon, ChevronUpIcon, DragHandleIcon } from "@shopify/polaris-icons";
 import { authenticate } from "../shopify.server.js";
 import {
   getFeaturedProducts,
@@ -427,6 +428,55 @@ export default function CollectionDetail() {
     });
   }, []);
 
+  // Move featured product straight to the top
+  const moveToTop = useCallback((productId) => {
+    setFeatured((prev) => {
+      const idx = prev.findIndex((p) => p.id === productId);
+      if (idx <= 0) return prev;
+      const newArr = [...prev];
+      const [item] = newArr.splice(idx, 1);
+      newArr.unshift(item);
+      return newArr;
+    });
+  }, []);
+
+  // ── Drag and drop reordering ────────────────────────────────────────────────
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
+
+  const handleDragStart = useCallback((idx) => {
+    setDragIndex(idx);
+  }, []);
+
+  const handleDragOver = useCallback((e, idx) => {
+    e.preventDefault();
+    if (idx !== dragIndex) {
+      setDragOverIndex(idx);
+    }
+  }, [dragIndex]);
+
+  const handleDragEnd = useCallback(() => {
+    setDragIndex(null);
+    setDragOverIndex(null);
+  }, []);
+
+  const handleDrop = useCallback((e, dropIdx) => {
+    e.preventDefault();
+    if (dragIndex === null || dragIndex === dropIdx) {
+      setDragIndex(null);
+      setDragOverIndex(null);
+      return;
+    }
+    setFeatured((prev) => {
+      const newArr = [...prev];
+      const [item] = newArr.splice(dragIndex, 1);
+      newArr.splice(dropIdx, 0, item);
+      return newArr;
+    });
+    setDragIndex(null);
+    setDragOverIndex(null);
+  }, [dragIndex]);
+
   // Get effective inventory for a product (location-based or total)
   const getInventory = (product) => {
     if (locationInventory && Object.keys(locationInventory).length > 0) {
@@ -609,7 +659,7 @@ export default function CollectionDetail() {
                       <Text variant="bodySm" tone="subdued">
                         {oosOnlyMode
                           ? "Featured settings are saved but not applied while OOS-only mode is active."
-                          : "These will appear at the top of the collection, in this order."}
+                          : "Drag to reorder, or use the arrow buttons. These appear at the top of the collection, in this order."}
                       </Text>
                     </BlockStack>
                   </InlineStack>
@@ -629,20 +679,34 @@ export default function CollectionDetail() {
                       )}
                       {featured.map((product, idx) => {
                         const isOOS = (product.totalInventory || 0) <= 0;
+                        const isDragging = dragIndex === idx;
+                        const isDragOver = dragOverIndex === idx;
                         return (
                         <div
                           key={product.id}
+                          draggable
+                          onDragStart={() => handleDragStart(idx)}
+                          onDragOver={(e) => handleDragOver(e, idx)}
+                          onDrop={(e) => handleDrop(e, idx)}
+                          onDragEnd={handleDragEnd}
                           style={{
                             display: "flex",
                             alignItems: "center",
                             gap: 12,
                             padding: "10px 12px",
                             background: isOOS ? "#fff4f4" : "#fff9e6",
-                            border: `1px solid ${isOOS ? "#ff9b9b" : "#ffd700"}`,
+                            border: isDragOver
+                              ? "2px dashed #008060"
+                              : `1px solid ${isOOS ? "#ff9b9b" : "#ffd700"}`,
                             borderRadius: 8,
-                            opacity: isOOS ? 0.85 : 1,
+                            opacity: isDragging ? 0.4 : isOOS ? 0.85 : 1,
+                            cursor: "grab",
+                            transition: "border 0.1s, opacity 0.1s",
                           }}
                         >
+                          <div style={{ cursor: "grab", display: "flex", color: "#999" }}>
+                            <Icon source={DragHandleIcon} tone="subdued" />
+                          </div>
                           <Text variant="bodyMd" tone="subdued" fontWeight="bold">
                             {idx + 1}
                           </Text>
@@ -663,6 +727,14 @@ export default function CollectionDetail() {
                             </div>
                           </div>
                           <InlineStack gap="100">
+                            <Button
+                              icon={ChevronUpIcon}
+                              size="slim"
+                              variant="plain"
+                              disabled={idx === 0}
+                              onClick={() => moveToTop(product.id)}
+                              accessibilityLabel="Move to top"
+                            />
                             <Button
                               icon={ArrowUpIcon}
                               size="slim"
