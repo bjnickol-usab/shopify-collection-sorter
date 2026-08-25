@@ -283,6 +283,10 @@ export async function action({ request }) {
 
       const featured = JSON.parse(featuredJson);
       const products = JSON.parse(productsJson);
+      // Reuse the location inventory already fetched by the loader for this page view,
+      // instead of re-fetching every product/variant again here (was slow enough on
+      // large, multi-location collections to risk the request timing out).
+      const locationInventory = JSON.parse(formData.get("locationInventory") || "{}");
 
       // 1. Save featured products (preserved even in OOS mode for switching back)
       await setFeaturedProducts(shopDomain, collectionId, featured);
@@ -295,45 +299,6 @@ export async function action({ request }) {
       const manualErrors = setManualData.data?.collectionUpdate?.userErrors;
       if (manualErrors?.length > 0) {
         return json({ success: false, message: manualErrors[0].message });
-      }
-
-      // Get location settings
-      const shopSettings = await getShopSettings(shopDomain);
-      const selectedLocationIds = shopSettings?.selected_location_ids || [];
-
-      // Fetch location inventory for the products passed in
-      // (products come from the form as JSON, need to re-fetch for inventory item IDs)
-      // Use product totalInventory as fallback; for location-specific we need full product data
-      let locationInventory = {};
-      if (selectedLocationIds.length > 0) {
-        // Fetch fresh product data with variant inventory items
-        let freshProducts = [];
-        let after = null;
-        let hasNextPage = true;
-        while (hasNextPage) {
-          const resp = await admin.graphql(GET_COLLECTION_PRODUCTS, {
-            variables: { collectionId, first: 100, after },
-          });
-          const { data: d } = await resp.json();
-          const edges = d?.collection?.products?.edges || [];
-          freshProducts = freshProducts.concat(edges.map((e) => ({
-            ...e.node,
-            variants: e.node.variants?.edges?.map((v) => v.node) || [],
-          })));
-          hasNextPage = d?.collection?.products?.pageInfo?.hasNextPage || false;
-          after = d?.collection?.products?.pageInfo?.endCursor || null;
-          if (edges.length === 0) break;
-        }
-        locationInventory = await fetchLocationInventory(
-          admin.graphql.bind(admin),
-          freshProducts,
-          selectedLocationIds
-        );
-        // Merge location inventory into products array
-        products = products.map((p) => ({
-          ...p,
-          _locationInventory: locationInventory[p.id] ?? p.totalInventory,
-        }));
       }
 
       let sortedOrder;
@@ -519,6 +484,7 @@ export default function CollectionDetail() {
     );
     fd.set("collectionTitle", collection.title);
     fd.set("oosOnlyMode", String(oosOnlyMode));
+    fd.set("locationInventory", JSON.stringify(locationInventory));
     fetcher.submit(fd, { method: "post" });
   };
 
