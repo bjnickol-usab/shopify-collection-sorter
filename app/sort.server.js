@@ -99,6 +99,42 @@ export function createSnapshotFromCurrentOrder(products) {
   return snapshot;
 }
 
+const GET_INVENTORY_LEVELS = `
+  query GetInventoryLevels($inventoryItemId: ID!, $first: Int!) {
+    inventoryItem(id: $inventoryItemId) {
+      inventoryLevels(first: $first) {
+        edges {
+          node {
+            location { id }
+            quantities(names: ["available"]) {
+              name
+              quantity
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+async function fetchVariantLocationQuantity(adminGraphql, variant, locationIdSet) {
+  if (!variant.inventoryItem?.id) return 0;
+
+  const response = await adminGraphql(GET_INVENTORY_LEVELS, {
+    variables: { inventoryItemId: variant.inventoryItem.id, first: 50 },
+  });
+  const { data } = await response.json();
+  const levels = data?.inventoryItem?.inventoryLevels?.edges || [];
+
+  let total = 0;
+  for (const { node } of levels) {
+    if (locationIdSet.has(node.location.id)) {
+      total += node.quantities?.find((q) => q.name === "available")?.quantity || 0;
+    }
+  }
+  return total;
+}
+
 /**
  * Fetch location inventory for a list of products using selected location IDs.
  * Returns a map of { productId: totalInventoryAtSelectedLocations }
@@ -116,54 +152,31 @@ export async function fetchLocationInventory(adminGraphql, products, selectedLoc
   const locationInventory = {};
   const locationIdSet = new Set(selectedLocationIds);
 
-  // Batch products into groups of 10 to avoid query complexity limits
-  const BATCH_SIZE = 10;
-
-  for (let i = 0; i < products.length; i += BATCH_SIZE) {
-    const batch = products.slice(i, i + BATCH_SIZE);
-
-    for (const product of batch) {
-      let productTotal = 0;
-
-      // Each product may have multiple variants, each with an inventoryItem
-      if (product.variants) {
-        for (const variant of product.variants) {
-          if (!variant.inventoryItem?.id) continue;
-
-          const response = await adminGraphql(
-            `query GetInventoryLevels($inventoryItemId: ID!, $first: Int!) {
-              inventoryItem(id: $inventoryItemId) {
-                inventoryLevels(first: $first) {
-                  edges {
-                    node {
-                      location { id }
-                      quantities(names: ["available"]) {
-                        name
-                        quantity
-                      }
-                    }
-                  }
-                }
-              }
-            }`,
-            { variables: { inventoryItemId: variant.inventoryItem.id, first: 50 } }
-          );
-
-          const { data } = await response.json();
-          const levels = data?.inventoryItem?.inventoryLevels?.edges || [];
-
-          for (const { node } of levels) {
-            if (locationIdSet.has(node.location.id)) {
-              const availableQty = node.quantities?.find(q => q.name === "available")?.quantity || 0;
-              productTotal += availableQty;
-            }
-          }
-        }
-      }
-
-      locationInventory[product.id] = productTotal;
+  // Flatten every variant into its own task so we can fan requests out
+  // instead of awaiting them one at a time (which was slow enough on
+  // large collections to risk request timeouts).
+  const tasks = [];
+  for (const product of products) {
+    locationInventory[product.id] = 0;
+    for (const variant of product.variants || []) {
+      tasks.push({ productId: product.id, variant });
     }
   }
+
+  const CONCURRENCY = 8;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < tasks.length) {
+      const { productId, variant } = tasks[cursor++];
+      const qty = await fetchVariantLocationQuantity(adminGraphql, variant, locationIdSet);
+      locationInventory[productId] += qty;
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker)
+  );
 
   return locationInventory;
 }
