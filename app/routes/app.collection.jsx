@@ -125,7 +125,10 @@ async function fetchAllProducts(admin, collectionId) {
       variables: { collectionId, first: 100, after },
     });
     const { data } = await response.json();
-    const products = data?.collection?.products?.edges?.map((e) => e.node) || [];
+    const products = data?.collection?.products?.edges?.map((e) => ({
+      ...e.node,
+      variants: e.node.variants?.edges?.map((v) => v.node) || [],
+    })) || [];
     all = all.concat(products);
     hasNextPage = data?.collection?.products?.pageInfo?.hasNextPage || false;
     after = data?.collection?.products?.pageInfo?.endCursor || null;
@@ -155,7 +158,10 @@ export async function loader({ request }) {
   });
   const firstData = await firstResponse.json();
   collection = firstData.data?.collection;
-  products = firstData.data?.collection?.products?.edges?.map((e) => e.node) || [];
+  products = firstData.data?.collection?.products?.edges?.map((e) => ({
+    ...e.node,
+    variants: e.node.variants?.edges?.map((v) => v.node) || [],
+  })) || [];
 
   // Paginate if needed
   let hasNext = firstData.data?.collection?.products?.pageInfo?.hasNextPage;
@@ -166,7 +172,10 @@ export async function loader({ request }) {
       variables: { collectionId, first: 100, after },
     });
     const d = await resp.json();
-    const more = d.data?.collection?.products?.edges?.map((e) => e.node) || [];
+    const more = d.data?.collection?.products?.edges?.map((e) => ({
+      ...e.node,
+      variants: e.node.variants?.edges?.map((v) => v.node) || [],
+    })) || [];
     products = products.concat(more);
     hasNext = d.data?.collection?.products?.pageInfo?.hasNextPage;
     after = d.data?.collection?.products?.pageInfo?.endCursor;
