@@ -1,5 +1,5 @@
 import { json } from "@remix-run/node";
-import { useLoaderData, useFetcher } from "@remix-run/react";
+import { useLoaderData, useNavigate, useFetcher } from "@remix-run/react";
 import { useState, useCallback, useEffect, useRef } from "react";
 import {
   Page,
@@ -76,6 +76,7 @@ export async function loader({ request }) {
 
 export default function CollectionsList() {
   const { collections } = useLoaderData();
+  const navigate = useNavigate();
   const fetcher = useFetcher();
 
   const [search, setSearch] = useState("");
@@ -322,14 +323,13 @@ export default function CollectionsList() {
                           </BlockStack>
                         </InlineStack>
 
-                        <a
-                          href={`/app/collection?id=${encodeURIComponent(col.id)}`}
-                          style={{ textDecoration: "none", pointerEvents: sorting ? "none" : "auto" }}
+                        <Button
+                          size="slim"
+                          disabled={sorting}
+                          onClick={() => navigate(`/app/collection?id=${encodeURIComponent(col.id)}`)}
                         >
-                          <Button size="slim" disabled={sorting}>
-                            Manage
-                          </Button>
-                        </a>
+                          Manage
+                        </Button>
                       </InlineStack>
                     </Box>
                   </div>

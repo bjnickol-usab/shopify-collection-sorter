@@ -101,14 +101,16 @@ export default function Dashboard() {
       <Text variant="bodyMd" tone={lastSorted ? undefined : "subdued"} key={`time-${col.id}`}>
         {lastSorted ? formatDate(lastSorted) : "Never sorted"}
       </Text>,
-      (() => {
-        const encodedId = encodeURIComponent(col.id);
-        return (
-          <a key={`btn-${col.id}`} href={`/app/collection?id=${encodedId}`} style={{ textDecoration: "none" }}>
-            <Button size="slim">Manage</Button>
-          </a>
-        );
-      })(),
+      <Button
+        key={`btn-${col.id}`}
+        size="slim"
+        onClick={() => {
+          const encodedId = encodeURIComponent(col.id);
+          navigate(`/app/collection?id=${encodedId}`);
+        }}
+      >
+        Manage
+      </Button>,
     ];
   });
 
