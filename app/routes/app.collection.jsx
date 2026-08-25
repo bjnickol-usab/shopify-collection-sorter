@@ -181,22 +181,19 @@ export async function loader({ request }) {
     after = d.data?.collection?.products?.pageInfo?.endCursor;
   }
 
-  // Get location settings and fetch location-based inventory
+  // Get location settings, then fetch location inventory, featured products,
+  // and sort settings concurrently — none of these depend on each other.
   const shopSettings = await getShopSettings(shopDomain);
   const selectedLocationIds = shopSettings?.selected_location_ids || [];
-  const locationInventory = await fetchLocationInventory(
-    admin.graphql.bind(admin),
-    products,
-    selectedLocationIds
-  );
 
-  // Get featured products from Supabase
-  const featuredRows = await getFeaturedProducts(shopDomain, collectionId);
+  const [locationInventory, featuredRows, sortSettings] = await Promise.all([
+    fetchLocationInventory(admin.graphql.bind(admin), products, selectedLocationIds),
+    getFeaturedProducts(shopDomain, collectionId),
+    getCollectionSortSettings(shopDomain, collectionId),
+  ]);
+
   const featuredIds = new Set(featuredRows.map((r) => r.product_id));
-
-  // Get sort settings including OOS mode
-  const sortSettings = await getCollectionSortSettings(shopDomain, collectionId);
-  const { oosOnlyMode } = await getPositionSnapshot(shopDomain, collectionId);
+  const oosOnlyMode = sortSettings?.oos_only_mode || false;
 
   return json({
     collection: {
