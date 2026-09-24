@@ -39,6 +39,6 @@
     "extensions/*"
   ],
   "engines": {
-    "node": "20.x"
+    "node": "24.x"
   }
 }
